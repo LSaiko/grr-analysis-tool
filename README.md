@@ -32,13 +32,51 @@ ndc ≥ 5 is required for adequate measurement discrimination.
 
 ---
 
+## Example Reports
+
+Two contrasting studies are included to demonstrate the full range of outcomes.
+
+### Example A — Mitutoyo 293-340-30 (MARGINAL)
+
+> Dataset: [`sample_grr.csv`](sample_grr.csv) · Report: [`grr_report.pdf`](grr_report.pdf)
+
+Precision digital micrometer with small operator biases (0 / +0.003 / −0.002 mm) and low gage noise (σ = 0.002 mm). Part spread ±0.030 mm around nominal 10.000 mm.
+
+### Example B — Vernier Caliper VC-07 (UNACCEPTABLE)
+
+> Dataset: [`sample_grr_marginal.csv`](sample_grr_marginal.csv) · Report: [`grr_report_marginal.pdf`](grr_report_marginal.pdf)
+
+Worn vernier caliper with large operator biases (0 / +0.009 / −0.007 mm) and high gage noise (σ = 0.007 mm). Part spread ±0.012 mm around nominal 25.000 mm — tighter tolerance amplifies the measurement system's share of total variation.
+
+### Side-by-side comparison
+
+| Metric | Example A — Mitutoyo | Example B — Vernier Caliper |
+|--------|----------------------|----------------------------|
+| Equipment | Mitutoyo 293-340-30 SN-0042 | Vernier Caliper VC-07 SN-1138 |
+| Nominal dimension | 10.000 mm | 25.000 mm |
+| Gage noise (σ) | 0.002 mm | 0.007 mm |
+| Max operator bias | ±0.003 mm | ±0.009 mm |
+| EV — Repeatability | 0.0087 (10.1%) | 0.0381 (60.1%) |
+| AV — Reproducibility | 0.0119 (13.7%) | 0.0424 (66.9%) |
+| **%GR&R** | **17.0%** | **89.9%** |
+| PV — Part Variation | 0.0854 (98.5%) | 0.0277 (43.7%) |
+| TV — Total Variation | 0.0867 | 0.0634 |
+| ndc | 8.2 ✅ | 0.7 ❌ |
+| **Verdict** | ⚠️ **MARGINAL** | ❌ **UNACCEPTABLE** |
+
+**Key takeaway:** Example B is unacceptable not because the gage is dramatically worse in absolute terms, but because the part spread is much tighter (±0.012 mm vs ±0.030 mm). When tolerances tighten, measurement system capability requirements become significantly stricter — the gage noise and operator variation now dominate total variation. Example A would move to ACCEPTABLE with operator re-training to reduce the reproducibility component.
+
+---
+
 ## Files
 
 | File | Description |
 |------|-------------|
 | `grr_tool.py` | Main analysis script (CLI) |
-| `sample_grr.csv` | Sample dataset — 10 parts × 3 operators × 3 trials |
-| `grr_report.pdf` | Pre-generated sample PDF report |
+| `sample_grr.csv` | Example A dataset — Mitutoyo, 10 parts × 3 operators × 3 trials |
+| `grr_report.pdf` | Example A PDF report — MARGINAL (17.0% GR&R) |
+| `sample_grr_marginal.csv` | Example B dataset — Vernier Caliper, same study design |
+| `grr_report_marginal.pdf` | Example B PDF report — UNACCEPTABLE (89.9% GR&R) |
 
 ---
 
