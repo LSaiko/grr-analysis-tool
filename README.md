@@ -72,14 +72,14 @@ CMM-class gage with near-zero operator biases (0 / +0.001 / −0.001 mm) and ver
 | **%GR&R** | **17.0%** | **89.9%** | **8.2%** |
 | PV — Part Variation | 0.0854 (98.5%) | 0.0277 (43.7%) | 0.0923 (99.7%) |
 | TV — Total Variation | 0.0867 | 0.0634 | 0.0926 |
-| ndc | 8.2 ✅ | 0.7 ❌ | 17.2 ✅ |
+| ndc | 8 ✅ | 0 ❌ | 17 ✅ |
 | **Verdict** | ⚠️ **MARGINAL** | ❌ **UNACCEPTABLE** | ✅ **ACCEPTABLE** |
 
 **What drives the difference across the three examples:**
 
-- **Example C (ACCEPTABLE)** — PV is 99.7% of TV. The CMM's noise and operator variation are so small they are practically invisible next to real part-to-part differences. ndc = 17.2 means the gage can reliably discriminate 17 distinct categories of part variation — far beyond the minimum of 5.
+- **Example C (ACCEPTABLE)** — PV is 99.7% of TV. The CMM's noise and operator variation are so small they are practically invisible next to real part-to-part differences. ndc = 17 means the gage can reliably discriminate 17 distinct categories of part variation — far beyond the minimum of 5.
 - **Example A (MARGINAL)** — AV (13.7%) is the dominant GR&R component, meaning operator technique differences are the primary weakness, not the gage itself. Targeted operator re-training or a fixture to enforce consistent contact force would likely push this into ACCEPTABLE.
-- **Example B (UNACCEPTABLE)** — Both EV and AV are high in absolute terms, but the critical issue is that the part spread is tight (±0.012 mm). The measurement noise (σ = 0.007 mm) is more than half the total part range, so the gage literally cannot distinguish good parts from bad. ndc < 1 means the system provides no meaningful discrimination — it is worse than a coin flip for sorting product.
+- **Example B (UNACCEPTABLE)** — Both EV and AV are high in absolute terms, but the critical issue is that the part spread is tight (±0.012 mm). The measurement noise (σ = 0.007 mm) is more than half the total part range, so the gage literally cannot distinguish good parts from bad. ndc = 0 means the system provides no meaningful discrimination — it is worse than a coin flip for sorting product.
 
 ---
 
@@ -100,49 +100,75 @@ CMM-class gage with near-zero operator biases (0 / +0.001 / −0.001 mm) and ver
 ## Requirements
 
 ```
-pandas
-reportlab
+pandas>=1.5.0
+numpy>=1.23.0
+matplotlib>=3.6.0
+reportlab>=3.6.0
 ```
 
 Install dependencies:
 
 ```bash
-pip install pandas reportlab
+pip install -r requirements.txt
 ```
 
 ---
 
 ## Usage
 
-### Analyze an existing CSV
+### PDF report + interactive dashboard (most common)
 
 ```bash
 python grr_tool.py \
   --input sample_grr.csv \
   --output grr_report.pdf \
+  --dashboard grr_dashboard.html \
   --equipment "Mitutoyo 293-340-30 SN-1234" \
   --operator "QE Team"
 ```
 
-### Generate sample data and analyze
+### Generate sample data and run full analysis
 
 ```bash
 python grr_tool.py \
   --generate-sample \
   --input sample_grr.csv \
   --output grr_report.pdf \
+  --dashboard grr_dashboard.html \
   --equipment "Digital Caliper #3" \
   --operator "J. Martinez"
+```
+
+### PDF only, with tolerance reporting
+
+```bash
+python grr_tool.py \
+  --input my_data.csv \
+  --output report.pdf \
+  --tolerance 0.050 \
+  --equipment "Caliper SN-0042"
+```
+
+> `--tolerance` accepts the **full** engineering tolerance range (e.g. `0.050` for a ±0.025 mm spec). Enables `%Tolerance` rows in both the PDF and dashboard — useful when the AIAG `%Study Variation` criterion isn't tight enough for your application.
+
+### Dashboard only (no PDF)
+
+```bash
+python grr_tool.py --input data.csv --dashboard results.html
+# Open results.html in any browser — no server needed
 ```
 
 ### All options
 
 ```
---input,    -i  Path to input CSV (required)
---output,   -o  Path for output PDF report (default: grr_report.pdf)
---equipment,-e  Gage / equipment identifier string
---operator      Name of QE or team who performed the study
---generate-sample  Generate a synthetic 10×3×3 CSV before analysis
+--input,      -i  Path to input CSV (required)
+--output,     -o  PDF output path  (default: <input_stem>_grr_report.pdf)
+--dashboard,  -d  Interactive HTML dashboard path (e.g. grr_dashboard.html)
+--tolerance,  -t  Full engineering tolerance range — enables %Tolerance reporting
+--title           Report/dashboard title
+--equipment,  -e  Gage / equipment identifier string
+--operator        Name of QE or team who performed the study
+--generate-sample Generate a synthetic 10x3x3 CSV before analysis
 ```
 
 ---
@@ -170,15 +196,35 @@ Supported study dimensions:
 
 ## Output
 
-The tool prints a summary to stdout and generates a PDF report containing:
+The tool always prints a console summary. Optional file outputs:
 
-- Study metadata (equipment, operator, date)
-- Variation components table with % of total variation
-- Intermediate calculation values (R̄̄, X-diff, Rp) for audit traceability
+### PDF report (`--output`)
+
+Professional ReportLab report with embedded matplotlib charts:
+
+- Study metadata (equipment, operator, date, regulatory ref)
+- Variation components table (% Study Variation, assessment)
+- Intermediate calculation values (R-bar-bar, X-diff, Rp, K-constants) — audit trail
 - Per-operator breakdown (grand mean and average range)
 - Color-coded acceptance determination banner (green / amber / red)
+- AIAG acceptance criteria reference table
+- **Variance components bar chart** with 10% / 30% AIAG threshold lines
+- **R-Chart** (range by part and operator) with UCL_R control limit
+- **X-bar Chart** (mean by part and operator) — shows part-to-part variation pattern
 - Interpretation notes and corrective action guidance
-- AIAG constants reference and regulatory footer
+- Regulatory footer (21 CFR 820.72 / AIAG MSA 4th Ed.)
+
+### Interactive HTML dashboard (`--dashboard`)
+
+Self-contained single-file dashboard (Chart.js, no server needed):
+
+- **%GRR gauge meter** with green/amber/red acceptance zones
+- **Operator toggle buttons** — show/hide individual operators on R-chart and X-bar chart
+- **Variance components bar chart** with interactive threshold annotations
+- **R-Chart** and **X-bar Chart** (Chart.js, zoom/hover)
+- Key metrics grid (GRR, NDC, EV, AV, PV, TV)
+- Full metrics table and per-operator breakdown
+- %Tolerance section (when `--tolerance` is provided)
 
 ---
 
