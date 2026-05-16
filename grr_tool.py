@@ -37,6 +37,8 @@ Usage examples:
 
 from __future__ import annotations
 
+__version__ = "1.1.0"
+
 import argparse
 import csv
 import json
@@ -1483,6 +1485,8 @@ def parse_args() -> argparse.Namespace:
                    help="Name of QE or team who performed the study")
     p.add_argument("--generate-sample", action="store_true",
                    help="Generate a sample 10-part x 3-operator x 3-trial CSV before analysis")
+    p.add_argument("--version", "-v", action="version",
+                   version=f"%(prog)s {__version__}")
     return p.parse_args()
 
 

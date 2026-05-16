@@ -1,5 +1,10 @@
 # GR&R Analysis Tool
 
+![version](https://img.shields.io/badge/version-1.1.0-blue)
+![python](https://img.shields.io/badge/python-%3E%3D3.7-blue)
+![standard](https://img.shields.io/badge/standard-AIAG%20MSA%204th%20Ed-orange)
+![regulatory](https://img.shields.io/badge/regulatory-21%20CFR%20820.72-red)
+
 Gauge Repeatability & Reproducibility (GR&R) analysis tool following the **AIAG MSA 4th Edition** standard.
 Designed for medical device manufacturing quality engineering under **21 CFR 820.72** (FDA Inspection, Measuring, and Test Equipment).
 
@@ -38,13 +43,13 @@ Two contrasting studies are included to demonstrate the full range of outcomes.
 
 ### Example A — Mitutoyo 293-340-30 (MARGINAL)
 
-> Dataset: [`sample_grr.csv`](sample_grr.csv) · Report: [`grr_report.pdf`](grr_report.pdf)
+> Dataset: [`sample_grr.csv`](sample_grr.csv) · Report: [`grr_report.pdf`](grr_report.pdf) · Dashboard: [`grr_dashboard.html`](grr_dashboard.html)
 
 Precision digital micrometer with small operator biases (0 / +0.003 / −0.002 mm) and low gage noise (σ = 0.002 mm). Part spread ±0.030 mm around nominal 10.000 mm.
 
 ### Example B — Vernier Caliper VC-07 (UNACCEPTABLE)
 
-> Dataset: [`sample_grr_marginal.csv`](sample_grr_marginal.csv) · Report: [`grr_report_marginal.pdf`](grr_report_marginal.pdf)
+> Dataset: [`sample_grr_unacceptable.csv`](sample_grr_unacceptable.csv) · Report: [`grr_report_unacceptable.pdf`](grr_report_unacceptable.pdf)
 
 Worn vernier caliper with large operator biases (0 / +0.009 / −0.007 mm) and high gage noise (σ = 0.007 mm). Part spread ±0.012 mm around nominal 25.000 mm — tighter tolerance amplifies the measurement system's share of total variation.
 
@@ -87,13 +92,15 @@ CMM-class gage with near-zero operator biases (0 / +0.001 / −0.001 mm) and ver
 
 | File | Description |
 |------|-------------|
-| `grr_tool.py` | Main analysis script (CLI) |
+| `grr_tool.py` | Main analysis script (CLI) — v1.1.0 |
+| `requirements.txt` | Python dependencies (Python ≥ 3.7) |
 | `sample_grr.csv` | Example A dataset — Mitutoyo micrometer |
-| `grr_report.pdf` | Example A PDF report — ⚠️ MARGINAL (17.0% GR&R, ndc 8.2) |
-| `sample_grr_marginal.csv` | Example B dataset — Vernier caliper |
-| `grr_report_marginal.pdf` | Example B PDF report — ❌ UNACCEPTABLE (89.9% GR&R, ndc 0.7) |
+| `grr_report.pdf` | Example A PDF report — ⚠️ MARGINAL (17.0% GR&R, ndc 8) |
+| `grr_dashboard.html` | Example A interactive dashboard — open in any browser |
+| `sample_grr_unacceptable.csv` | Example B dataset — Vernier caliper |
+| `grr_report_unacceptable.pdf` | Example B PDF report — ❌ UNACCEPTABLE (89.9% GR&R, ndc 0) |
 | `sample_grr_acceptable.csv` | Example C dataset — Zeiss CMM |
-| `grr_report_acceptable.pdf` | Example C PDF report — ✅ ACCEPTABLE (8.2% GR&R, ndc 17.2) |
+| `grr_report_acceptable.pdf` | Example C PDF report — ✅ ACCEPTABLE (8.2% GR&R, ndc 17) |
 
 ---
 
@@ -169,6 +176,7 @@ python grr_tool.py --input data.csv --dashboard results.html
 --equipment,  -e  Gage / equipment identifier string
 --operator        Name of QE or team who performed the study
 --generate-sample Generate a synthetic 10x3x3 CSV before analysis
+--version,    -v  Show tool version and exit
 ```
 
 ---

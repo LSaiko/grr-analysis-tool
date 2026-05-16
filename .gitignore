@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool outputs (keep the named example files; ignore temp/local runs)
+# To track a generated file explicitly: git add -f myfile.pdf
+*.pdf
+!grr_report.pdf
+!grr_report_acceptable.pdf
+!grr_report_unacceptable.pdf
+
+*.html
+!grr_dashboard.html
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

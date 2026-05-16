@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GR&R Study Dashboard — Shaft OD (MARGINAL)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --navy:   #1A3A5C;  --teal:  #16A085;
+    --orange: #E67E22;  --green: #27AE60;
+    --red:    #C0392B;  --grey:  #95A5A6;
+    --bg:     #f0f3f7;  --card:  #ffffff;
+    --border: #d0d7e2;  --text:  #1a2332;  --muted: #667388;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: var(--bg); color: var(--text); font-size: 14px; }
+  header { background: var(--navy); color: #fff; padding: 18px 32px 14px;
+             display: flex; justify-content: space-between; align-items: center;
+             flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; }
+  header .meta { font-size: 0.78rem; opacity: .75; text-align: right; line-height: 1.6; }
+  .verdict-bar { background: #7a3a00; color: #fde9d0;
+                   padding: 12px 32px; display: flex; align-items: center;
+                   gap: 16px; flex-wrap: wrap; }
+  .verdict-badge { background: #E67E22; color: #fff; font-size: 0.85rem;
+                     font-weight: 700; padding: 4px 14px; border-radius: 4px;
+                     letter-spacing: .05em; }
+  .verdict-detail { font-size: 0.9rem; opacity: .9; }
+  main { max-width: 1200px; margin: 24px auto; padding: 0 20px; }
+  .grid { display: grid; gap: 20px; }
+  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+            padding: 20px 22px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .card h2 { font-size: 0.9rem; font-weight: 700; color: var(--navy);
+               text-transform: uppercase; letter-spacing: .06em; margin-bottom: 14px; }
+  .chart-wrap { position: relative; height: 260px; }
+  .chart-wrap-tall { position: relative; height: 300px; }
+  .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .kpi { background: #f7f9fc; border: 1px solid var(--border); border-radius: 6px;
+           padding: 10px 14px; }
+  .kpi-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
+                 letter-spacing: .05em; }
+  .kpi-value { font-size: 1.35rem; font-weight: 700; color: var(--navy); margin-top: 2px; }
+  .kpi-sub { font-size: 0.72rem; color: var(--muted); margin-top: 1px; }
+  .gauge-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px;
+                  padding: 10px 0 4px; }
+  .gauge-track { width: 100%; height: 18px; border-radius: 9px; overflow: hidden;
+                   display: flex; position: relative; }
+  .gz-accept { background: var(--green); flex: 10; }
+  .gz-marg   { background: var(--orange); flex: 20; }
+  .gz-bad    { background: var(--red);    flex: 70; }
+  .gauge-pin-row { width: 100%; position: relative; height: 24px; }
+  .gauge-pin { position: absolute; transform: translateX(-50%); display: flex;
+                 flex-direction: column; align-items: center; font-size: 0.8rem;
+                 font-weight: 700; color: var(--navy); }
+  .gauge-pin::before { content: ""; width: 2px; height: 12px; background: var(--navy);
+                         display: block; margin-bottom: 2px; }
+  .gauge-labels { width: 100%; display: flex; justify-content: space-between;
+                    font-size: 0.7rem; color: var(--muted); }
+  .toggle-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .op-btn { padding: 4px 14px; border-radius: 4px; border: 2px solid;
+              font-size: 0.78rem; font-weight: 600; cursor: pointer;
+              transition: opacity .15s; background: #fff; }
+  .op-btn.off { opacity: .35; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th { background: var(--navy); color: #fff; padding: 7px 10px;
+        text-align: left; font-weight: 600; font-size: 0.75rem; }
+  td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  tr:nth-child(even) td { background: #f7f9fc; }
+  tr.grr-row td { font-weight: 700; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 3px;
+           font-size: 0.72rem; font-weight: 700; }
+  .tag-ok   { background: #d5f5e3; color: #1a5c2e; }
+  .tag-mg   { background: #fdebd0; color: #7a3a00; }
+  .tag-bad  { background: #fadbd8; color: #5c1a1a; }
+  .tag-info { background: #e8f0fa; color: #1a3a5c; }
+  footer { text-align: center; font-size: 0.72rem; color: var(--muted);
+             padding: 24px 16px; border-top: 1px solid var(--border); margin-top: 32px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>&#x1F4CF; GR&R Study Dashboard — Shaft OD (MARGINAL)</h1>
+    <div style="font-size:.78rem;opacity:.7;margin-top:3px">
+      AIAG MSA 4th Edition &mdash; Average &amp; Range Method
+    </div>
+  </div>
+  <div class="meta">
+    <div><b>Equipment:</b> Mitutoyo 293-340-30 SN-0042</div>
+    <div><b>Study by:</b> QE Team</div>
+    <div><b>Date:</b> 2026-05-16</div>
+  </div>
+</header>
+
+<div class="verdict-bar">
+  <span class="verdict-badge">MARGINAL</span>
+  <span class="verdict-detail">
+    %GRR = <b>17.0%</b> &nbsp;|&nbsp;
+    NDC = <b>8</b> &nbsp;|&nbsp;
+    10 parts &times; 3 operators &times; 3 trials
+    
+  </span>
+</div>
+
+<main>
+
+<!-- Row 1: KPIs + Gauge -->
+<div class="grid grid-2" style="margin-bottom:20px">
+  <div class="card">
+    <h2>Key Metrics</h2>
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-label">Gauge R&amp;R (%GRR)</div>
+        <div class="kpi-value" style="color:var(--orange)">17.0%</div>
+        <div class="kpi-sub">AIAG: &le;10% accept / &le;30% marginal</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">NDC</div>
+        <div class="kpi-value" style="color:var(--green)">8</div>
+        <div class="kpi-sub">Adequate (&ge;5 required)</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Repeatability (EV)</div>
+        <div class="kpi-value">10.1%</div>
+        <div class="kpi-sub">&sigma; = 0.00872</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Reproducibility (AV)</div>
+        <div class="kpi-value">13.7%</div>
+        <div class="kpi-sub">&sigma; = 0.01190</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Part Variation (PV)</div>
+        <div class="kpi-value">98.5%</div>
+        <div class="kpi-sub">&sigma; = 0.08541</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Total Variation (TV)</div>
+        <div class="kpi-value">0.08668</div>
+        <div class="kpi-sub">R-bar = 0.00286</div>
+      </div>
+      
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>%GRR Acceptance Gauge</h2>
+    <div class="gauge-wrap">
+      <div class="gauge-track">
+        <div class="gz-accept"></div>
+        <div class="gz-marg"></div>
+        <div class="gz-bad"></div>
+      </div>
+      <div class="gauge-pin-row">
+        <div class="gauge-pin" style="left:17.02%">17.0%</div>
+      </div>
+      <div class="gauge-labels">
+        <span>0%</span><span>10%</span><span>30%</span><span>100%</span>
+      </div>
+    </div>
+    <div style="margin-top:16px">
+      <table>
+        <thead><tr><th>Zone</th><th>Range</th><th>AIAG Verdict</th></tr></thead>
+        <tbody>
+          <tr><td style="color:var(--green);font-weight:700">Acceptable</td>
+              <td>&le; 10%</td><td><span class="tag tag-ok">PASS</span></td></tr>
+          <tr><td style="color:var(--orange);font-weight:700">Marginal</td>
+              <td>10% &ndash; 30%</td><td><span class="tag tag-mg">CAUTION</span></td></tr>
+          <tr><td style="color:var(--red);font-weight:700">Unacceptable</td>
+              <td>&gt; 30%</td><td><span class="tag tag-bad">FAIL</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Operator toggles -->
+<div class="card" style="margin-bottom:20px">
+  <h2>Operator Filter</h2>
+  <div class="toggle-row" id="op-toggles"></div>
+</div>
+
+<!-- Charts row -->
+<div class="grid grid-2" style="margin-bottom:20px">
+  <div class="card">
+    <h2>Variance Components (%Study Variation)</h2>
+    <div class="chart-wrap"><canvas id="comp-chart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>R-Chart (Range by Part)</h2>
+    <div class="chart-wrap"><canvas id="r-chart"></canvas></div>
+  </div>
+</div>
+
+<!-- X-bar chart full width -->
+<div class="card" style="margin-bottom:20px">
+  <h2>X-bar Chart (Mean by Part and Operator)</h2>
+  <div class="chart-wrap-tall"><canvas id="xbar-chart"></canvas></div>
+</div>
+
+<!-- Metrics table -->
+<div class="card" style="margin-bottom:20px">
+  <h2>Detailed Variance Components</h2>
+  <table>
+    <thead>
+      <tr><th>Component</th><th>Study Variation (&sigma;)</th>
+          <th>% of TV</th><th>Assessment</th></tr>
+    </thead>
+    <tbody id="metrics-body"></tbody>
+  </table>
+  <p style="font-size:.72rem;color:var(--muted);margin-top:8px">
+    GR&amp;R row: AIAG pass/fail criteria (<=10%/10-30%/>30%).
+    EV and AV: diagnostic level (Low/Moderate/High) identifying dominant variation source.
+  </p>
+</div>
+
+<!-- Operator breakdown -->
+<div class="card" style="margin-bottom:20px">
+  <h2>Per-Operator Breakdown</h2>
+  <table>
+    <thead><tr><th>Operator</th><th>Grand Mean (X-bar)</th><th>Avg Range (R-bar)</th></tr></thead>
+    <tbody id="op-body"></tbody>
+  </table>
+</div>
+
+</main>
+
+<footer>
+  Generated by grr_tool.py &mdash; AIAG MSA 4th Edition Average &amp; Range Method &bull;
+  5.15&sigma; study variation convention &bull; Regulatory basis: 21 CFR 820.72 (FDA QSR)
+</footer>
+
+<script>
+const D = {
+  "title": "GR&R Study Dashboard \u2014 Shaft OD (MARGINAL)",
+  "equipment": "Mitutoyo 293-340-30 SN-0042",
+  "studyOperator": "QE Team",
+  "reportDate": "2026-05-16",
+  "parts": [
+    "P01",
+    "P02",
+    "P03",
+    "P04",
+    "P05",
+    "P06",
+    "P07",
+    "P08",
+    "P09",
+    "P10"
+  ],
+  "ops": [
+    "Alice",
+    "Bob",
+    "Carol"
+  ],
+  "ranges": [
+    [
+      0.0017999999999993577,
+      0.0039999999999995595,
+      0.0038000000000000256,
+      0.004099999999999326,
+      0.0025999999999992696,
+      0.005000000000000782,
+      0.004799999999999471,
+      0.000600000000000378,
+      0.0025999999999992696,
+      0.0038000000000000256
+    ],
+    [
+      0.002200000000000202,
+      0.0022999999999999687,
+      0.004000000000001336,
+      0.0007999999999999119,
+      0.0023999999999997357,
+      0.001900000000000901,
+      0.002000000000000668,
+      0.0030000000000001137,
+      0.0023999999999997357,
+      0.0016999999999995907
+    ],
+    [
+      0.0024999999999995026,
+      0.001300000000000523,
+      0.0036000000000004917,
+      0.0008999999999996788,
+      0.006299999999999528,
+      0.0025999999999992696,
+      0.0033999999999991815,
+      0.0029000000000003467,
+      0.0018999999999991246,
+      0.0045999999999999375
+    ]
+  ],
+  "means": [
+    [
+      10.009766666666666,
+      9.970833333333333,
+      9.986666666666666,
+      9.9825,
+      10.014533333333333,
+      10.0113,
+      10.023200000000001,
+      9.973866666666666,
+      9.992966666666666,
+      9.9719
+    ],
+    [
+      10.010299999999999,
+      9.975200000000001,
+      9.986366666666667,
+      9.986199999999998,
+      10.016766666666667,
+      10.015466666666667,
+      10.026933333333334,
+      9.978433333333333,
+      9.999366666666667,
+      9.9765
+    ],
+    [
+      10.007466666666668,
+      9.969766666666667,
+      9.984933333333332,
+      9.9826,
+      10.013066666666667,
+      10.007233333333334,
+      10.023833333333334,
+      9.973033333333333,
+      9.9943,
+      9.970833333333333
+    ]
+  ],
+  "rBars": [
+    0.0033099999999997463,
+    0.0022700000000002163,
+    0.0029999999999997585
+  ],
+  "xBars": [
+    9.993753333333334,
+    9.997153333333333,
+    9.992706666666667
+  ],
+  "rBarBar": 0.0028599999999999073,
+  "uclR": 0.007361639999999761,
+  "grandMean": 9.994537777777778,
+  "rp": 0.052722222222222115,
+  "xDiff": 0.004446666666666488,
+  "ev": 0.008722999999999717,
+  "pctEV": 10.064025015430406,
+  "av": 0.011899902451980656,
+  "pctAV": 13.729326602994252,
+  "grr": 0.014754606310120589,
+  "pctGRR": 17.022896594965694,
+  "pv": 0.08540999999999983,
+  "pctPV": 98.54045357880744,
+  "tv": 0.08667506277682539,
+  "ndc": 8,
+  "status": "MARGINAL",
+  "avClamped": false,
+  "outOfControl": 0,
+  "k1": 3.05,
+  "k2": 2.7,
+  "k3": 1.62,
+  "d4": 2.574,
+  "nParts": 10,
+  "nOps": 3,
+  "nTrials": 3,
+  "tolerance": null,
+  "pctTolEV": null,
+  "pctTolAV": null,
+  "pctTolGRR": null
+};
+const OP_COLORS = ["#1A3A5C", "#E67E22", "#16A085", "#8E44AD", "#C0392B"];
+const activeOps = new Set(D.ops);
+const charts = {};
+
+// Operator toggle buttons
+function buildToggles() {
+  const row = document.getElementById('op-toggles');
+  D.ops.forEach((op, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'op-btn';
+    btn.id = 'btn-' + op;
+    btn.textContent = 'Operator ' + op;
+    btn.style.borderColor = OP_COLORS[i % OP_COLORS.length];
+    btn.style.color = OP_COLORS[i % OP_COLORS.length];
+    btn.addEventListener('click', () => {
+      if (activeOps.has(op)) activeOps.delete(op); else activeOps.add(op);
+      btn.classList.toggle('off', !activeOps.has(op));
+      ['r-chart', 'xbar-chart'].forEach(id => {
+        const ch = charts[id];
+        if (!ch) return;
+        D.ops.forEach((o, j) => ch.setDatasetVisibility(j, activeOps.has(o)));
+        ch.update();
+      });
+      renderMetrics();
+    });
+    row.appendChild(btn);
+  });
+}
+
+// AIAG threshold line plugin (components chart only)
+const thresholdPlugin = {
+  id: 'thresholds',
+  afterDraw(chart) {
+    const {ctx, chartArea: {left, right}, scales: {y}} = chart;
+    [[10,'#27AE60','10% (Acceptable)'], [30,'#C0392B','30% (Unacceptable)']].forEach(([v,c,lbl]) => {
+      const yp = y.getPixelForValue(v);
+      ctx.save();
+      ctx.setLineDash([5,4]); ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(left,yp); ctx.lineTo(right,yp); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = c; ctx.font='600 10px sans-serif';
+      ctx.textAlign='right'; ctx.fillText(lbl, right-4, yp-4);
+      ctx.restore();
+    });
+  }
+};
+Chart.register(thresholdPlugin);
+
+// Components bar chart
+function buildComp() {
+  const vals = [D.pctEV, D.pctAV, D.pctGRR, D.pctPV];
+  const bg = ['#16A085','#E67E22',
+    D.pctGRR>30?'#C0392B':D.pctGRR>10?'#E67E22':'#27AE60', '#1A3A5C'];
+  charts['comp-chart'] = new Chart(document.getElementById('comp-chart'), {
+    type: 'bar',
+    data: {
+      labels: ['Repeatability (EV)','Reproducibility (AV)','Gauge R&R','Part Variation (PV)'],
+      datasets: [{ data: vals, backgroundColor: bg, borderRadius: 4 }]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins: { legend:{display:false},
+        tooltip:{ callbacks:{ label: c => ' '+c.parsed.y.toFixed(1)+'%' } } },
+      scales: {
+        y: { suggestedMax: Math.ceil(Math.max(...vals,32)/10)*10+10,
+               ticks:{ callback: v => v+'%' }, grid:{ color:'#e8ecf0' } },
+        x: { grid:{ display:false } }
+      }
+    }
+  });
+}
+
+// R-Chart
+function buildRChart() {
+  const datasets = D.ops.map((op,i) => ({
+    label:'Op. '+op, data: D.ranges[i],
+    borderColor: OP_COLORS[i%OP_COLORS.length],
+    backgroundColor: OP_COLORS[i%OP_COLORS.length]+'22',
+    pointRadius:5, borderWidth:1.5, tension:0.1,
+  }));
+  datasets.push({ label:'UCL_R = '+D.uclR.toFixed(4),
+    data: Array(D.parts.length).fill(D.uclR),
+    borderColor:'#C0392B', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false });
+  datasets.push({ label:'R-bar = '+D.rBarBar.toFixed(4),
+    data: Array(D.parts.length).fill(D.rBarBar),
+    borderColor:'#95A5A6', borderDash:[3,3], borderWidth:1.2, pointRadius:0, fill:false });
+  charts['r-chart'] = new Chart(document.getElementById('r-chart'), {
+    type:'line', data:{ labels:D.parts, datasets },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12, font:{ size:11 } } } },
+      scales:{ y:{ grid:{ color:'#e8ecf0' } }, x:{ grid:{ display:false } } }
+    }
+  });
+}
+
+// X-bar Chart
+function buildXbar() {
+  const datasets = D.ops.map((op,i) => ({
+    label:'Op. '+op, data: D.means[i],
+    borderColor: OP_COLORS[i%OP_COLORS.length],
+    backgroundColor: OP_COLORS[i%OP_COLORS.length]+'22',
+    pointRadius:5, borderWidth:1.5, tension:0.1,
+  }));
+  charts['xbar-chart'] = new Chart(document.getElementById('xbar-chart'), {
+    type:'line', data:{ labels:D.parts, datasets },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:12, font:{ size:11 } } } },
+      scales:{ y:{ grid:{ color:'#e8ecf0' } }, x:{ grid:{ display:false } } }
+    }
+  });
+}
+
+// Metrics table
+function renderMetrics() {
+  function verdict(p) { return p<=10?'Acceptable':p<=30?'Marginal':'Unacceptable'; }
+  function level(p)   { return p<=10?'Low':p<=30?'Moderate':'High'; }
+  function tag(s) {
+    const cls = {Acceptable:'tag-ok',Low:'tag-ok',Marginal:'tag-mg',Moderate:'tag-mg',
+                  Unacceptable:'tag-bad',High:'tag-bad','&mdash;':'tag-info'}[s]||'tag-info';
+    return `<span class="tag ${cls}">${s}</span>`;
+  }
+  const rows = [
+    ['EV &mdash; Equipment (Repeatability)',   D.ev,  D.pctEV,  level(D.pctEV)],
+    ['AV &mdash; Appraiser (Reproducibility)', D.av,  D.pctAV,  level(D.pctAV)],
+    ['GR&amp;R &mdash; Combined',              D.grr, D.pctGRR, verdict(D.pctGRR)],
+    ['PV &mdash; Part Variation',              D.pv,  D.pctPV,  '&mdash;'],
+    ['TV &mdash; Total Variation',             D.tv,  100.0,    '&mdash;'],
+  ];
+  let html = rows.map((r,i) =>
+    `<tr class="${i===2?'grr-row':''}">
+       <td>${r[0]}</td><td>${r[1].toFixed(5)}</td>
+       <td>${r[2].toFixed(1)}%</td><td>${tag(r[3])}</td></tr>`
+  ).join('');
+  if (D.tolerance) {
+    html += '<tr><td colspan="4" style="height:6px;background:#f7f9fc"></td></tr>';
+    [['%Tolerance (EV)',D.pctTolEV],['%Tolerance (AV)',D.pctTolAV],
+     ['%Tolerance (GRR)',D.pctTolGRR]].forEach(([l,v]) => {
+      html += `<tr><td>${l}</td><td>&mdash;</td><td>${v.toFixed(1)}%</td><td>${tag(verdict(v))}</td></tr>`;
+    });
+  }
+  document.getElementById('metrics-body').innerHTML = html;
+}
+
+// Operator breakdown table
+function renderOpTable() {
+  document.getElementById('op-body').innerHTML = D.ops.map((op,i) =>
+    `<tr>
+       <td style="color:${OP_COLORS[i%OP_COLORS.length]};font-weight:700">${op}</td>
+       <td>${D.xBars[i].toFixed(5)}</td>
+       <td>${D.rBars[i].toFixed(5)}</td></tr>`
+  ).join('');
+}
+
+// Init
+buildToggles(); buildComp(); buildRChart(); buildXbar();
+renderMetrics(); renderOpTable();
+</script>
+</body>
+</html>
