@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "msa_toolkit"
+version = "0.1.0"
+description = "MSA Toolkit: GR&R, ANOVA, Process Capability, and Control Charts for regulated manufacturing"
+readme = "README_TOOLKIT.md"
+requires-python = ">=3.7"
+license = { text = "MIT" }
+keywords = ["MSA", "GRR", "SPC", "AIAG", "capability", "control charts", "medical device", "21 CFR 820"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "pandas>=1.5.0",
+    "numpy>=1.23.0",
+    "matplotlib>=3.6.0",
+    "reportlab>=3.6.0",
+]
+
+[project.optional-dependencies]
+stats = ["scipy>=1.7.0"]
+dev   = ["pytest>=7.0", "scipy>=1.7.0"]
+
+[project.scripts]
+msa-toolkit = "msa_toolkit.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["msa_toolkit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
