@@ -37,7 +37,7 @@ Usage examples:
 
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 import argparse
 import csv
@@ -56,6 +56,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from io import BytesIO
+
+try:
+    import scipy.stats as _scipy_stats
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -97,6 +103,68 @@ D4_BY_TRIALS: Dict[int, float] = {2: 3.267, 3: 2.574, 4: 2.282, 5: 2.114}
 GRR_ACCEPTABLE_THRESHOLD = 10.0   # %GR&R <= 10% -> Acceptable
 GRR_MARGINAL_THRESHOLD   = 30.0   # %GR&R <= 30% -> Marginal
 NDC_MINIMUM              = 5      # ndc >= 5 required for adequate discrimination
+
+# Hardcoded chi-squared percentile table for CI fallback when scipy is absent.
+# Keys: degrees of freedom 1–30. Values: (chi2_0.025, chi2_0.975) for 95% CI
+#       and (chi2_0.05, chi2_0.95) for 90% CI stored as (lo_95, hi_95, lo_90, hi_90).
+_CHI2_TABLE: Dict[int, Tuple[float, float, float, float]] = {
+    1:  (0.001, 5.024, 0.004, 3.841),
+    2:  (0.051, 7.378, 0.103, 5.991),
+    3:  (0.216, 9.348, 0.352, 7.815),
+    4:  (0.484, 11.143, 0.711, 9.488),
+    5:  (0.831, 12.833, 1.145, 11.070),
+    6:  (1.237, 14.449, 1.635, 12.592),
+    7:  (1.690, 16.013, 2.167, 14.067),
+    8:  (2.180, 17.535, 2.733, 15.507),
+    9:  (2.700, 19.023, 3.325, 16.919),
+    10: (3.247, 20.483, 3.940, 18.307),
+    11: (3.816, 21.920, 4.575, 19.675),
+    12: (4.404, 23.337, 5.226, 21.026),
+    13: (5.009, 24.736, 5.892, 22.362),
+    14: (5.629, 26.119, 6.571, 23.685),
+    15: (6.262, 27.488, 7.261, 24.996),
+    16: (6.908, 28.845, 7.962, 26.296),
+    17: (7.564, 30.191, 8.672, 27.587),
+    18: (8.231, 31.526, 9.390, 28.869),
+    19: (8.907, 32.852, 10.117, 30.144),
+    20: (9.591, 34.170, 10.851, 31.410),
+    21: (10.283, 35.479, 11.591, 32.671),
+    22: (10.982, 36.781, 12.338, 33.924),
+    23: (11.689, 38.076, 13.091, 35.172),
+    24: (12.401, 39.364, 13.848, 36.415),
+    25: (13.120, 40.646, 14.611, 37.652),
+    26: (13.844, 41.923, 15.379, 38.885),
+    27: (14.573, 43.194, 16.151, 40.113),
+    28: (15.308, 44.461, 16.928, 41.337),
+    29: (16.047, 45.722, 17.708, 42.557),
+    30: (16.791, 46.979, 18.493, 43.773),
+}
+
+
+def _chi2_ppf(p: float, df: int) -> float:
+    """Return chi-squared quantile at probability p for given df."""
+    if _SCIPY_AVAILABLE:
+        return float(_scipy_stats.chi2.ppf(p, df))
+    df_clamped = max(1, min(30, df))
+    lo95, hi95, lo90, hi90 = _CHI2_TABLE[df_clamped]
+    if abs(p - 0.025) < 0.001: return lo95
+    if abs(p - 0.975) < 0.001: return hi95
+    if abs(p - 0.05)  < 0.001: return lo90
+    if abs(p - 0.95)  < 0.001: return hi90
+    return lo95
+
+
+def _ci_on_sigma(sigma: float, df: int, confidence: float = 0.95) -> Tuple[float, float]:
+    """Return (lower, upper) CI on a standard deviation estimate via chi-squared.
+    sigma: estimated std dev; df: degrees of freedom for the estimate."""
+    if df <= 0 or sigma <= 0:
+        return (0.0, float("inf"))
+    alpha = 1.0 - confidence
+    chi_lo = _chi2_ppf(alpha / 2, df)
+    chi_hi = _chi2_ppf(1 - alpha / 2, df)
+    lower = sigma * math.sqrt(df / chi_hi) if chi_hi > 0 else 0.0
+    upper = sigma * math.sqrt(df / chi_lo) if chi_lo > 0 else float("inf")
+    return (lower, upper)
 
 # ---------------------------------------------------------------------------
 # Color palette
@@ -176,14 +244,25 @@ class GRRResults:
 
     # Optional tolerance-based metrics
     tolerance:   Optional[float] = None
+    usl:         Optional[float] = None   # upper spec limit (alternative to tolerance)
+    lsl:         Optional[float] = None   # lower spec limit
     pct_tol_ev:  Optional[float] = None
     pct_tol_av:  Optional[float] = None
     pct_tol_grr: Optional[float] = None
+    ndc_tol:     Optional[float] = None   # ndc computed from tolerance span
 
     # Quality indicator
     ndc:        int  = 0       # Number of Distinct Categories (floor integer)
     av_clamped: bool = False   # True when AV^2 < 0 and was clamped to 0
     status:     str  = ""      # ACCEPTABLE / MARGINAL / UNACCEPTABLE
+
+    # Confidence intervals on variance components (95% and 90%)
+    ev_ci95:  Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
+    av_ci95:  Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
+    grr_ci95: Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
+    ev_ci90:  Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
+    av_ci90:  Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
+    grr_ci90: Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
 
     # Per-operator breakdown (for tables and charts)
     parts:          List[str]           = field(default_factory=list)
@@ -317,6 +396,8 @@ def compute_grr(
     n_operators: int,
     n_trials:    int,
     tolerance:   Optional[float] = None,
+    usl:         Optional[float] = None,
+    lsl:         Optional[float] = None,
 ) -> GRRResults:
     """
     Perform the full AIAG crossed GR&R calculation.
@@ -335,9 +416,13 @@ def compute_grr(
       5. Propagate through variance equations to get TV
       6. Compute percentage contributions, NDC, and acceptance status
     """
+    # Resolve tolerance from usl/lsl if not directly provided
+    if tolerance is None and usl is not None and lsl is not None:
+        tolerance = usl - lsl
+
     res = GRRResults(
         n_parts=n_parts, n_operators=n_operators, n_trials=n_trials,
-        tolerance=tolerance,
+        tolerance=tolerance, usl=usl, lsl=lsl,
         k1=K1_BY_TRIALS[n_trials],
         k2=K2_BY_OPERATORS[n_operators],
         k3=K3_BY_PARTS[n_parts],
@@ -430,6 +515,30 @@ def compute_grr(
         res.pct_tol_ev  = 100.0 * res.ev  / tolerance
         res.pct_tol_av  = 100.0 * res.av  / tolerance
         res.pct_tol_grr = 100.0 * res.grr / tolerance
+        # Secondary ndc based on tolerance span (AIAG formula variant)
+        if res.grr > 0:
+            res.ndc_tol = 1.41 * (tolerance / res.grr)
+
+    # Confidence intervals (AIAG MSA 4th Ed. Appendix C chi-squared approach)
+    # df_ev = n_operators * n_parts * (n_trials - 1)
+    df_ev  = n_operators * n_parts * (n_trials - 1)
+    df_pv  = n_parts - 1
+    # EV sigma = ev / 5.15 (convert study variation back to sigma for CI calc)
+    sigma_ev = res.ev / 5.15 if res.ev > 0 else 0.0
+    res.ev_ci95 = tuple(v * 5.15 for v in _ci_on_sigma(sigma_ev, df_ev, 0.95))
+    res.ev_ci90 = tuple(v * 5.15 for v in _ci_on_sigma(sigma_ev, df_ev, 0.90))
+    # AV CI is approximate — use operator df
+    sigma_av = res.av / 5.15 if res.av > 0 else 0.0
+    df_av = max(1, n_operators - 1)
+    res.av_ci95 = tuple(v * 5.15 for v in _ci_on_sigma(sigma_av, df_av, 0.95))
+    res.av_ci90 = tuple(v * 5.15 for v in _ci_on_sigma(sigma_av, df_av, 0.90))
+    # GR&R CI: propagate EV and AV CIs via conservative bound
+    grr_lo95 = math.sqrt(max(0.0, res.ev_ci95[0]**2 + res.av_ci95[0]**2))
+    grr_hi95 = math.sqrt(res.ev_ci95[1]**2 + res.av_ci95[1]**2)
+    res.grr_ci95 = (grr_lo95, grr_hi95)
+    grr_lo90 = math.sqrt(max(0.0, res.ev_ci90[0]**2 + res.av_ci90[0]**2))
+    grr_hi90 = math.sqrt(res.ev_ci90[1]**2 + res.av_ci90[1]**2)
+    res.grr_ci90 = (grr_lo90, grr_hi90)
 
     return res
 
@@ -1444,6 +1553,584 @@ renderMetrics(); renderOpTable();
 
 
 # ---------------------------------------------------------------------------
+# Linearity & Bias Study  (Task 4A)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LinearityResults:
+    reference_values: List[float]
+    biases:           List[float]   # mean_measurement - reference for each level
+    slope:            float = 0.0
+    intercept:        float = 0.0
+    r_squared:        float = 0.0
+    slope_p_value:    Optional[float] = None
+    linearity_pct:    Optional[float] = None   # |slope| * process_range / TV * 100
+    process_range:    Optional[float] = None
+
+@dataclass
+class BiasResults:
+    bias:          float = 0.0
+    bias_pct:      float = 0.0   # % of tolerance
+    t_statistic:   float = 0.0
+    p_value:       Optional[float] = None
+    ci_95_lower:   float = 0.0
+    ci_95_upper:   float = 0.0
+    n:             int   = 0
+    std_dev:       float = 0.0
+
+
+def compute_linearity(
+    measurements:    List[float],
+    reference_values: List[float],
+    tolerance:       Optional[float] = None,
+) -> LinearityResults:
+    """Fit bias = a + b*reference regression and compute linearity metrics."""
+    if len(measurements) != len(reference_values):
+        sys.exit("[ERROR] --reference-values count must match measurement count.")
+
+    refs  = np.array(reference_values, dtype=float)
+    meas  = np.array(measurements, dtype=float)
+    biases = meas - refs
+
+    # Linear regression
+    n     = len(refs)
+    x_bar = refs.mean()
+    y_bar = biases.mean()
+    Sxx   = float(np.sum((refs - x_bar) ** 2))
+    Sxy   = float(np.sum((refs - x_bar) * (biases - y_bar)))
+    slope     = Sxy / Sxx if Sxx > 0 else 0.0
+    intercept = y_bar - slope * x_bar
+    y_hat     = slope * refs + intercept
+    ss_res    = float(np.sum((biases - y_hat) ** 2))
+    ss_tot    = float(np.sum((biases - y_bar) ** 2))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    slope_p = None
+    if _SCIPY_AVAILABLE and n > 2:
+        _, _, _, p_value, _ = _scipy_stats.linregress(refs, biases)
+        slope_p = float(p_value)
+
+    proc_range = float(refs.max() - refs.min()) if len(refs) > 1 else None
+    lin_pct    = None
+    if tolerance and tolerance > 0 and proc_range is not None:
+        lin_pct = abs(slope) * proc_range / tolerance * 100.0
+
+    return LinearityResults(
+        reference_values=reference_values,
+        biases=biases.tolist(),
+        slope=slope,
+        intercept=intercept,
+        r_squared=r_squared,
+        slope_p_value=slope_p,
+        linearity_pct=lin_pct,
+        process_range=proc_range,
+    )
+
+
+def compute_bias(
+    measurements: List[float],
+    reference:    float,
+    tolerance:    Optional[float] = None,
+) -> BiasResults:
+    """Compute bias statistics for a single known reference artifact."""
+    arr   = np.array(measurements, dtype=float)
+    n     = len(arr)
+    bias  = float(arr.mean() - reference)
+    std   = float(arr.std(ddof=1)) if n > 1 else 0.0
+    se    = std / math.sqrt(n) if n > 0 else 0.0
+    t_stat = bias / se if se > 0 else 0.0
+
+    p_val = None
+    if _SCIPY_AVAILABLE and n > 1:
+        p_val = float(2.0 * _scipy_stats.t.sf(abs(t_stat), df=n - 1))
+
+    # 95% CI using t-distribution
+    if _SCIPY_AVAILABLE and n > 1:
+        t_crit = float(_scipy_stats.t.ppf(0.975, df=n - 1))
+    else:
+        t_crit = 2.0  # conservative approximation
+    ci_lo = bias - t_crit * se
+    ci_hi = bias + t_crit * se
+
+    bias_pct = 100.0 * abs(bias) / tolerance if tolerance and tolerance > 0 else 0.0
+
+    return BiasResults(
+        bias=bias, bias_pct=bias_pct,
+        t_statistic=t_stat, p_value=p_val,
+        ci_95_lower=ci_lo, ci_95_upper=ci_hi,
+        n=n, std_dev=std,
+    )
+
+
+def _chart_linearity(lin: LinearityResults, tolerance: Optional[float]) -> Image:
+    """Scatter of bias vs. reference with regression line and 95% CI bands."""
+    refs   = np.array(lin.reference_values)
+    biases = np.array(lin.biases)
+    x_fit  = np.linspace(refs.min(), refs.max(), 100)
+    y_fit  = lin.slope * x_fit + lin.intercept
+
+    # Approximate 95% PI band
+    n   = len(refs)
+    se  = math.sqrt(sum((b - (lin.slope * r + lin.intercept))**2
+                        for r, b in zip(lin.reference_values, lin.biases)) / max(n - 2, 1))
+    se_arr = se * np.sqrt(1/n + (x_fit - refs.mean())**2 / max(np.sum((refs - refs.mean())**2), 1e-12))
+
+    fig, ax = plt.subplots(figsize=(6.8, 3.5), facecolor="white")
+    ax.scatter(refs, biases, color=NAVY, zorder=4, label="Observed bias", s=55)
+    ax.plot(x_fit, y_fit, color=TEAL, linewidth=1.8, label=f"y = {lin.slope:.5f}x + {lin.intercept:.5f}")
+    ax.fill_between(x_fit, y_fit - 2*se_arr, y_fit + 2*se_arr,
+                    alpha=0.12, color=TEAL, label="95% CI band")
+    ax.axhline(0, color=GREY, linestyle="--", linewidth=0.9)
+    ax.set_xlabel("Reference value", fontsize=9)
+    ax.set_ylabel("Bias (measured − reference)", fontsize=9)
+    ax.set_title("Linearity Study — Bias vs. Reference Value", fontsize=10,
+                 fontweight="bold", pad=8)
+    ax.legend(fontsize=7.5)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    return _fig_to_image(fig, 6.8, 3.5)
+
+
+# ---------------------------------------------------------------------------
+# Nested GR&R  (Task 4B — destructive testing)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NestedGRRResults:
+    ev:      float = 0.0   # repeatability
+    av:      float = 0.0   # operator variation
+    grr:     float = 0.0
+    pv:      float = 0.0
+    tv:      float = 0.0
+    pct_ev:  float = 0.0
+    pct_av:  float = 0.0
+    pct_grr: float = 0.0
+    pct_pv:  float = 0.0
+    ndc:     int   = 0
+    status:  str   = ""
+    n_operators: int = 0
+    n_parts_per_op: int = 0
+    n_trials: int = 0
+
+
+def compute_nested_grr(
+    records:     List[MeasurementRecord],
+    n_operators: int,
+    n_trials:    int,
+) -> NestedGRRResults:
+    """
+    Nested GR&R for destructive / non-reproducible samples.
+    Each operator measures a unique set of parts; parts are not crossed.
+    Variance decomposition via ANOVA-style nested model.
+    """
+    from collections import defaultdict
+
+    op_map: Dict[str, List[MeasurementRecord]] = defaultdict(list)
+    for rec in records:
+        op_map[rec.operator].append(rec)
+
+    n_parts_per_op = len(next(iter(op_map.values())))
+
+    # Within-operator repeatability: pooled variance of trial-to-trial ranges
+    all_within_vars = []
+    op_part_means: Dict[str, List[float]] = {}
+    for op_name, recs in op_map.items():
+        part_means  = [r.mean for r in recs]
+        op_part_means[op_name] = part_means
+        for r in recs:
+            vals = np.array(r.trials, dtype=float)
+            if len(vals) > 1:
+                all_within_vars.append(float(np.var(vals, ddof=1)))
+
+    sigma2_repeatability = float(np.mean(all_within_vars)) if all_within_vars else 0.0
+
+    # Between-parts within operator: variance of part means per operator, pooled
+    within_op_part_vars = []
+    for pm in op_part_means.values():
+        if len(pm) > 1:
+            within_op_part_vars.append(float(np.var(pm, ddof=1)))
+    sigma2_parts_within = float(np.mean(within_op_part_vars)) if within_op_part_vars else 0.0
+    sigma2_operator_parts = max(0.0, sigma2_parts_within - sigma2_repeatability / n_trials)
+
+    # Between-operator variance from operator grand means
+    op_grand_means = [float(np.mean(pm)) for pm in op_part_means.values()]
+    sigma2_operator = float(np.var(op_grand_means, ddof=1)) if len(op_grand_means) > 1 else 0.0
+    sigma2_operator = max(0.0, sigma2_operator - sigma2_operator_parts / n_parts_per_op)
+
+    # 5.15-sigma study variation
+    ev  = 5.15 * math.sqrt(sigma2_repeatability)
+    av  = 5.15 * math.sqrt(sigma2_operator)
+    grr = math.sqrt(ev**2 + av**2)
+    pv  = 5.15 * math.sqrt(max(0.0, sigma2_operator_parts))
+    tv  = math.sqrt(grr**2 + pv**2) if (grr**2 + pv**2) > 0 else 0.0
+
+    pct_ev  = (ev  / tv * 100) if tv > 0 else 0.0
+    pct_av  = (av  / tv * 100) if tv > 0 else 0.0
+    pct_grr = (grr / tv * 100) if tv > 0 else 0.0
+    pct_pv  = (pv  / tv * 100) if tv > 0 else 0.0
+    ndc     = int(math.floor(1.41 * pv / grr)) if grr > 0 else 0
+
+    status = ("ACCEPTABLE" if pct_grr <= GRR_ACCEPTABLE_THRESHOLD
+              else "MARGINAL" if pct_grr <= GRR_MARGINAL_THRESHOLD
+              else "UNACCEPTABLE")
+
+    return NestedGRRResults(
+        ev=ev, av=av, grr=grr, pv=pv, tv=tv,
+        pct_ev=pct_ev, pct_av=pct_av, pct_grr=pct_grr, pct_pv=pct_pv,
+        ndc=ndc, status=status,
+        n_operators=n_operators,
+        n_parts_per_op=n_parts_per_op,
+        n_trials=n_trials,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attribute GR&R  (Task 4D)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AttributeGRRResults:
+    operators:             List[str]
+    within_op_agreement:   Dict[str, float]   # % same decision across trials
+    between_op_agreement:  float              # % all operators agree on same part
+    kappa:                 Dict[str, float]   # per-operator kappa vs. majority vote
+    effectiveness:         Optional[Dict[str, float]] = None  # vs. reference
+    overall_effectiveness: Optional[float] = None
+    status:                str = ""           # ACCEPTABLE / MARGINAL / UNACCEPTABLE
+
+
+def compute_attribute_grr(
+    records:    List[MeasurementRecord],
+    references: Optional[Dict[str, int]] = None,
+) -> AttributeGRRResults:
+    """
+    Attribute Agreement Analysis for go/no-go, pass/fail data.
+    Trial values must be 0 or 1. References: {part_id: 0_or_1} if available.
+    """
+    from collections import defaultdict
+
+    # Group by operator and part
+    op_part: Dict[str, Dict[str, List[int]]] = defaultdict(lambda: defaultdict(list))
+    for rec in records:
+        for trial_val in rec.trials:
+            op_part[rec.operator][rec.part].append(int(round(trial_val)))
+
+    operators = sorted(op_part.keys())
+    parts     = sorted({rec.part for rec in records})
+
+    # Within-operator agreement: operator agrees with self across all trials for a part
+    within_agree: Dict[str, float] = {}
+    for op in operators:
+        agree_count = sum(
+            1 for p in parts
+            if len(set(op_part[op][p])) == 1
+        )
+        within_agree[op] = 100.0 * agree_count / len(parts)
+
+    # Between-operator agreement: all operators give the same majority decision for a part
+    between_count = 0
+    for p in parts:
+        # Majority decision per operator
+        op_decisions = []
+        for op in operators:
+            trials = op_part[op].get(p, [])
+            if trials:
+                op_decisions.append(1 if sum(trials) > len(trials) / 2 else 0)
+        if len(set(op_decisions)) == 1:
+            between_count += 1
+    between_agree = 100.0 * between_count / len(parts)
+
+    # Kappa per operator vs. majority vote across all operators
+    kappa_scores: Dict[str, float] = {}
+    # Build majority reference from all operators
+    majority_ref: Dict[str, int] = {}
+    for p in parts:
+        votes = []
+        for op in operators:
+            t = op_part[op].get(p, [])
+            if t:
+                votes.append(1 if sum(t) > len(t) / 2 else 0)
+        majority_ref[p] = 1 if sum(votes) > len(votes) / 2 else 0
+
+    for op in operators:
+        op_decisions = {p: (1 if sum(op_part[op].get(p, [0])) > len(op_part[op].get(p, [0])) / 2 else 0)
+                        for p in parts}
+        n_agree = sum(1 for p in parts if op_decisions[p] == majority_ref[p])
+        p_o   = n_agree / len(parts)
+        p_pos = sum(majority_ref.values()) / len(parts)
+        p_neg = 1.0 - p_pos
+        p_e   = p_pos * (sum(op_decisions.values()) / len(parts)) + \
+                p_neg * ((len(parts) - sum(op_decisions.values())) / len(parts))
+        kappa = (p_o - p_e) / (1.0 - p_e) if (1.0 - p_e) > 0 else 0.0
+        kappa_scores[op] = round(kappa, 3)
+
+    # Effectiveness vs. external reference
+    effectiveness: Optional[Dict[str, float]] = None
+    overall_eff: Optional[float] = None
+    if references:
+        effectiveness = {}
+        for op in operators:
+            match = sum(
+                1 for p in parts
+                if p in references and
+                (1 if sum(op_part[op].get(p, [0])) > len(op_part[op].get(p, [0])) / 2 else 0)
+                == references[p]
+            )
+            ref_parts = [p for p in parts if p in references]
+            effectiveness[op] = 100.0 * match / len(ref_parts) if ref_parts else 0.0
+        overall_eff = float(np.mean(list(effectiveness.values()))) if effectiveness else None
+
+    # Status from overall effectiveness or between-operator agreement
+    score = overall_eff if overall_eff is not None else between_agree
+    status = ("ACCEPTABLE" if score >= 90 else "MARGINAL" if score >= 80 else "UNACCEPTABLE")
+
+    return AttributeGRRResults(
+        operators=operators,
+        within_op_agreement=within_agree,
+        between_op_agreement=between_agree,
+        kappa=kappa_scores,
+        effectiveness=effectiveness,
+        overall_effectiveness=overall_eff,
+        status=status,
+    )
+
+
+def print_attribute_report(attr: AttributeGRRResults) -> None:
+    """Console output for attribute GR&R."""
+    w = 62
+    print()
+    print("=" * w)
+    print("  ATTRIBUTE AGREEMENT ANALYSIS".center(w))
+    print("=" * w)
+    print(f"  {'Operator':<20} {'Within-Op%':>12}  {'Kappa':>8}")
+    print(f"  {'-' * 45}")
+    for op in attr.operators:
+        kval = attr.kappa.get(op, 0.0)
+        print(f"  {op:<20} {attr.within_op_agreement[op]:>11.1f}%  {kval:>8.3f}")
+    print(f"\n  Between-operator agreement: {attr.between_op_agreement:.1f}%")
+    if attr.overall_effectiveness is not None:
+        print(f"  Overall effectiveness:      {attr.overall_effectiveness:.1f}%")
+        if attr.effectiveness:
+            for op, eff in attr.effectiveness.items():
+                print(f"    {op}: {eff:.1f}%")
+    print(f"\n  STATUS: {attr.status}")
+    print(f"  (>=90% Acceptable | 80-90% Marginal | <80% Unacceptable)")
+    print("=" * w)
+
+
+# ---------------------------------------------------------------------------
+# Run Chart + Nelson Rules  (Task 4F)
+# ---------------------------------------------------------------------------
+
+NELSON_RULES = {
+    1: "Rule 1: Point beyond 3σ",
+    2: "Rule 2: 9 consecutive points on same side of mean",
+    5: "Rule 5: 2 of 3 consecutive points beyond 2σ on same side",
+    6: "Rule 6: 4 of 5 consecutive points beyond 1σ on same side",
+}
+
+
+def detect_nelson_violations(values: List[float]) -> List[Tuple[int, int, str]]:
+    """
+    Detect Nelson rules 1, 2, 5, 6 on a list of values.
+    Returns list of (rule_number, index, description).
+    """
+    arr    = np.array(values, dtype=float)
+    mean   = arr.mean()
+    sigma  = arr.std(ddof=1) if len(arr) > 1 else 1.0
+    z      = (arr - mean) / sigma if sigma > 0 else np.zeros_like(arr)
+    violations: List[Tuple[int, int, str]] = []
+
+    for i, zi in enumerate(z):
+        # Rule 1: beyond 3σ
+        if abs(zi) > 3:
+            violations.append((1, i, NELSON_RULES[1]))
+
+    # Rule 2: 9 consecutive same side
+    signs = np.sign(z)
+    for i in range(8, len(signs)):
+        window = signs[i-8:i+1]
+        if len(set(window)) == 1 and window[0] != 0:
+            violations.append((2, i, NELSON_RULES[2]))
+
+    # Rule 5: 2 of 3 beyond 2σ same side
+    for i in range(2, len(z)):
+        window = z[i-2:i+1]
+        pos = sum(1 for v in window if v >  2)
+        neg = sum(1 for v in window if v < -2)
+        if pos >= 2 or neg >= 2:
+            violations.append((5, i, NELSON_RULES[5]))
+
+    # Rule 6: 4 of 5 beyond 1σ same side
+    for i in range(4, len(z)):
+        window = z[i-4:i+1]
+        pos = sum(1 for v in window if v >  1)
+        neg = sum(1 for v in window if v < -1)
+        if pos >= 4 or neg >= 4:
+            violations.append((6, i, NELSON_RULES[6]))
+
+    return violations
+
+
+def _chart_run(
+    run_values: List[float],
+    run_labels: Optional[List[str]] = None,
+    violations: Optional[List[Tuple[int, int, str]]] = None,
+) -> Image:
+    """Time-series run chart with Nelson rule violation markers."""
+    n      = len(run_values)
+    x      = np.arange(1, n + 1)
+    mean   = float(np.mean(run_values))
+    sigma  = float(np.std(run_values, ddof=1)) if n > 1 else 0.0
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.2), facecolor="white")
+    ax.plot(x, run_values, marker="o", markersize=4, color=NAVY,
+            linewidth=1.2, zorder=3)
+    ax.axhline(mean, color=GREY,   linestyle="-",  linewidth=1.0,
+               label=f"Mean = {mean:.4f}")
+    ax.axhline(mean + 3*sigma, color=RED,  linestyle="--", linewidth=1.0,
+               label=f"+3σ = {mean + 3*sigma:.4f}")
+    ax.axhline(mean - 3*sigma, color=RED,  linestyle="--", linewidth=1.0,
+               label=f"-3σ = {mean - 3*sigma:.4f}")
+
+    if violations:
+        flagged = {v[1] for v in violations}
+        flag_x  = [x[i] for i in flagged if i < n]
+        flag_y  = [run_values[i] for i in flagged if i < n]
+        ax.scatter(flag_x, flag_y, color=RED, s=80, zorder=5, label="Nelson violation")
+
+    if run_labels:
+        ax.set_xticks(x[::max(1, n // 20)])
+        ax.set_xticklabels(run_labels[::max(1, n // 20)], fontsize=7, rotation=45)
+    ax.set_xlabel("Run order", fontsize=9)
+    ax.set_ylabel("Measurement", fontsize=9)
+    ax.set_title("Run Chart — Time Series Stability", fontsize=10,
+                 fontweight="bold", pad=8)
+    ax.legend(fontsize=7.5, ncol=2)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    return _fig_to_image(fig, 7.0, 3.2)
+
+
+# ---------------------------------------------------------------------------
+# Multi-study Comparison  (Task 4G)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StudySummary:
+    label:    str
+    pct_grr:  float
+    ndc:      int
+    pct_ev:   float
+    pct_av:   float
+    pct_pv:   float
+    status:   str
+
+
+def _chart_comparison(summaries: List[StudySummary]) -> Image:
+    """Side-by-side bar chart for multi-study comparison."""
+    labels   = [s.label for s in summaries]
+    pct_grrs = [s.pct_grr for s in summaries]
+    bar_colors = [
+        RED if s.pct_grr > 30 else ORANGE if s.pct_grr > 10 else GREEN
+        for s in summaries
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.5), facecolor="white")
+
+    # Left: %GRR bars
+    ax = axes[0]
+    bars = ax.bar(range(len(labels)), pct_grrs, color=bar_colors, width=0.5, zorder=3)
+    ax.axhline(10, color=GREEN, linestyle="--", linewidth=1.2, label="10% (Accept)")
+    ax.axhline(30, color=RED,   linestyle="--", linewidth=1.2, label="30% (Reject)")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, fontsize=8, rotation=20, ha="right")
+    ax.set_ylabel("%GRR", fontsize=9)
+    ax.set_title("%GR&R by Study", fontsize=10, fontweight="bold", pad=6)
+    ax.legend(fontsize=7.5)
+    for bar, val in zip(bars, pct_grrs):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                f"{val:.1f}%", ha="center", va="bottom", fontsize=7.5)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Right: stacked EV / AV / PV
+    ax2 = axes[1]
+    x    = np.arange(len(labels))
+    ev_v = [s.pct_ev for s in summaries]
+    av_v = [s.pct_av for s in summaries]
+    pv_v = [s.pct_pv for s in summaries]
+    ax2.bar(x, ev_v, 0.45, label="EV",  color=TEAL,   zorder=3)
+    ax2.bar(x, av_v, 0.45, bottom=ev_v, label="AV",   color=ORANGE, zorder=3)
+    ax2.bar(x, pv_v, 0.45,
+            bottom=[e + a for e, a in zip(ev_v, av_v)],
+            label="PV", color=NAVY, zorder=3)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, fontsize=8, rotation=20, ha="right")
+    ax2.set_ylabel("% Study Variation", fontsize=9)
+    ax2.set_title("Variance Components by Study", fontsize=10, fontweight="bold", pad=6)
+    ax2.legend(fontsize=7.5)
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+
+    fig.tight_layout()
+    return _fig_to_image(fig, 9.0, 3.5)
+
+
+def build_comparison_report(
+    summaries:   List[StudySummary],
+    output_path: Path,
+) -> None:
+    """Generate a multi-study comparison PDF."""
+    doc = SimpleDocTemplate(
+        str(output_path), pagesize=letter,
+        leftMargin=0.75*inch, rightMargin=0.75*inch,
+        topMargin=0.65*inch, bottomMargin=0.80*inch,
+        title="GR&R Multi-Study Comparison",
+    )
+    s_title   = _ps("T",  fontSize=14, fontName="Helvetica-Bold",
+                          textColor=_C_DARK, alignment=1, spaceAfter=6)
+    s_section = _ps("Se", fontSize=10, fontName="Helvetica-Bold",
+                          textColor=_C_DARK, spaceBefore=8, spaceAfter=4)
+    story = [
+        Paragraph("GR&R Multi-Study Comparison", s_title),
+        HRFlowable(width="100%", thickness=1.5, color=_C_DARK),
+        Spacer(1, 0.15*inch),
+    ]
+
+    # Summary table
+    story.append(Paragraph("Study Comparison Summary", s_section))
+    hdr = ["Study", "%GRR", "EV%", "AV%", "PV%", "ndc", "Verdict"]
+    rows = [hdr] + [
+        [s.label, f"{s.pct_grr:.1f}%", f"{s.pct_ev:.1f}%",
+         f"{s.pct_av:.1f}%", f"{s.pct_pv:.1f}%", str(s.ndc), s.status]
+        for s in summaries
+    ]
+    tbl = Table(rows, colWidths=[1.8*inch, 0.85*inch, 0.75*inch,
+                                  0.75*inch, 0.75*inch, 0.6*inch, 1.2*inch])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), _C_DARK),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), _C_WHITE),
+        ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_C_LGRAY, _C_WHITE]),
+        ("GRID",           (0, 0), (-1, -1), 0.4, _C_BORD),
+        ("ALIGN",          (1, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING",     (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING",  (0, 0), (-1, -1), 5),
+    ]))
+    story += [tbl, Spacer(1, 0.15*inch)]
+
+    story.append(Paragraph("Comparison Charts", s_section))
+    story.append(_chart_comparison(summaries))
+
+    doc.build(story)
+    print(f"[+] Comparison report written to: {output_path}")
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -1477,6 +2164,10 @@ def parse_args() -> argparse.Namespace:
                    help="Output interactive HTML dashboard (e.g. grr_dashboard.html)")
     p.add_argument("--tolerance", "-t", type=float, default=None, metavar="TOLERANCE",
                    help="Full engineering tolerance range (e.g. 0.050 for +/-0.025 spec)")
+    p.add_argument("--usl", type=float, default=None, metavar="USL",
+                   help="Upper spec limit (alternative to --tolerance for asymmetric specs)")
+    p.add_argument("--lsl", type=float, default=None, metavar="LSL",
+                   help="Lower spec limit (alternative to --tolerance for asymmetric specs)")
     p.add_argument("--title",     type=str, default="GR&R Study Report", metavar="TITLE",
                    help='Report title (default: "GR&R Study Report")')
     p.add_argument("--equipment", "-e", type=str, default="Unspecified Gage", metavar="NAME",
@@ -1485,6 +2176,19 @@ def parse_args() -> argparse.Namespace:
                    help="Name of QE or team who performed the study")
     p.add_argument("--generate-sample", action="store_true",
                    help="Generate a sample 10-part x 3-operator x 3-trial CSV before analysis")
+    p.add_argument("--study-type", choices=["crossed", "nested", "linearity", "bias"],
+                   default="crossed",
+                   help="Study type: crossed (default), nested (destructive), linearity, bias")
+    p.add_argument("--reference-values", type=str, default=None, metavar="CSV_LIST",
+                   help="Comma-separated known reference values (for --study-type linearity/bias)")
+    p.add_argument("--attribute", action="store_true",
+                   help="Attribute agreement analysis mode (trial values must be 0 or 1)")
+    p.add_argument("--reference-csv", type=Path, default=None, metavar="REF_CSV",
+                   help="CSV with Part,Reference columns (0/1) for attribute effectiveness")
+    p.add_argument("--run-order", type=str, default=None, metavar="COLUMN",
+                   help="Column name in the CSV containing run order; enables run chart + Nelson rules")
+    p.add_argument("--compare", nargs="+", type=Path, default=None, metavar="CSV",
+                   help="Two or more CSV files for multi-study comparison report")
     p.add_argument("--version", "-v", action="version",
                    version=f"%(prog)s {__version__}")
     return p.parse_args()
@@ -1494,20 +2198,133 @@ def main() -> None:
     """Main entry point -- orchestrates sample generation, analysis, and reporting."""
     args = parse_args()
 
+    # ── Multi-study comparison mode ─────────────────────────────────────────
+    if args.compare:
+        summaries: List[StudySummary] = []
+        for csv_path in args.compare:
+            recs, np_, no_, nt_ = load_data(csv_path)
+            r = compute_grr(recs, np_, no_, nt_)
+            summaries.append(StudySummary(
+                label=csv_path.stem,
+                pct_grr=r.pct_grr, ndc=r.ndc,
+                pct_ev=r.pct_ev, pct_av=r.pct_av, pct_pv=r.pct_pv,
+                status=r.status,
+            ))
+        out = args.output or Path("grr_comparison.pdf")
+        build_comparison_report(summaries, out)
+        return
+
     if args.generate_sample:
         generate_sample_data(args.input)
 
-    # Default to PDF output when neither --output nor --dashboard is given
+    # ── Attribute mode ──────────────────────────────────────────────────────
+    if args.attribute:
+        records, _, _, _ = load_data(args.input)
+        refs: Optional[Dict[str, int]] = None
+        if args.reference_csv:
+            try:
+                ref_df = pd.read_csv(args.reference_csv)
+                refs = {str(r["Part"]): int(r["Reference"]) for _, r in ref_df.iterrows()}
+            except Exception as exc:
+                sys.exit(f"[ERROR] Failed to read reference CSV: {exc}")
+        attr = compute_attribute_grr(records, refs)
+        print_attribute_report(attr)
+        return
+
+    # ── Linearity / Bias modes ──────────────────────────────────────────────
+    if args.study_type in ("linearity", "bias"):
+        records, n_parts_, _, _ = load_data(args.input)
+        if not args.reference_values:
+            sys.exit("[ERROR] --reference-values is required for linearity/bias study types.")
+        ref_vals = [float(v.strip()) for v in args.reference_values.split(",")]
+
+        # For linearity: use per-part grand means (one mean per unique part in part order)
+        from collections import defaultdict as _dd
+        part_order = sorted({r.part for r in records})
+        part_meas_map: Dict[str, List[float]] = _dd(list)
+        for r in records:
+            part_meas_map[r.part].extend(r.trials)
+        # Bias mode: use all individual trial measurements vs. single reference
+        all_meas = [t for rec in records for t in rec.trials]
+        # Linearity mode: per-part mean measurements
+        part_means_lin = [float(np.mean(part_meas_map[p])) for p in part_order]
+
+        if args.study_type == "linearity":
+            lin = compute_linearity(part_means_lin, ref_vals, tolerance=args.tolerance)
+            print(f"\nLinearity Study:")
+            print(f"  Slope     : {lin.slope:.6f}")
+            print(f"  Intercept : {lin.intercept:.6f}")
+            print(f"  R²        : {lin.r_squared:.4f}")
+            if lin.slope_p_value is not None:
+                sig = "statistically significant" if lin.slope_p_value < 0.05 else "NOT significant"
+                print(f"  Slope p   : {lin.slope_p_value:.4f} ({sig} at alpha=0.05)")
+            if lin.linearity_pct is not None:
+                print(f"  Linearity : {lin.linearity_pct:.2f}% of tolerance")
+        else:
+            ref_single = ref_vals[0]
+            bres = compute_bias(all_meas, ref_single, tolerance=args.tolerance)
+            print(f"\nBias Study (reference = {ref_single}):")
+            print(f"  Bias      : {bres.bias:.6f}")
+            print(f"  %Bias     : {bres.bias_pct:.2f}% of tolerance")
+            print(f"  t-stat    : {bres.t_statistic:.4f}")
+            if bres.p_value is not None:
+                print(f"  p-value   : {bres.p_value:.4f}")
+            print(f"  95% CI    : [{bres.ci_95_lower:.6f}, {bres.ci_95_upper:.6f}]")
+            verdict = "ACCEPTABLE" if bres.bias_pct <= 1.0 else "UNACCEPTABLE"
+            print(f"  Verdict   : {verdict} (%bias {'<=' if bres.bias_pct <= 1.0 else '>'} 1%)")
+        return
+
+    # ── Default to PDF output when neither --output nor --dashboard is given ─
     pdf_path = args.output or (
         args.input.with_name(args.input.stem + "_grr_report.pdf")
         if not args.dashboard else None
     )
 
     records, n_parts, n_operators, n_trials = load_data(args.input)
+
+    # ── Nested GR&R ─────────────────────────────────────────────────────────
+    if args.study_type == "nested":
+        nres = compute_nested_grr(records, n_operators, n_trials)
+        print(f"\nNested GR&R (destructive study):")
+        print(f"  EV  : {nres.ev:.5f} ({nres.pct_ev:.1f}%)")
+        print(f"  AV  : {nres.av:.5f} ({nres.pct_av:.1f}%)")
+        print(f"  GRR : {nres.grr:.5f} ({nres.pct_grr:.1f}%)")
+        print(f"  PV  : {nres.pv:.5f} ({nres.pct_pv:.1f}%)")
+        print(f"  TV  : {nres.tv:.5f}")
+        print(f"  ndc : {nres.ndc}")
+        print(f"  STATUS: {nres.status}")
+        return
+
     res = compute_grr(records, n_parts, n_operators, n_trials,
-                      tolerance=args.tolerance)
+                      tolerance=args.tolerance, usl=args.usl, lsl=args.lsl)
+
+    # ── Run chart (if RunOrder column requested) ─────────────────────────────
+    run_chart_img: Optional[Image] = None
+    nelson_violations: List[Tuple[int, int, str]] = []
+    if args.run_order:
+        try:
+            df_run = pd.read_csv(args.input)
+            if args.run_order in df_run.columns:
+                df_run = df_run.sort_values(args.run_order)
+                trial_cols = [c for c in df_run.columns
+                              if c.lower().startswith("trial")]
+                run_vals = df_run[trial_cols].values.flatten().tolist()
+                run_vals_f = [float(v) for v in run_vals if pd.notna(v)]
+                nelson_violations = detect_nelson_violations(run_vals_f)
+                run_chart_img = _chart_run(run_vals_f, violations=nelson_violations)
+                if nelson_violations:
+                    print(f"[!] Nelson rule violations detected: {len(nelson_violations)}")
+                    for rule, idx, desc in nelson_violations[:5]:
+                        print(f"    Index {idx}: {desc}")
+        except Exception as exc:
+            print(f"[WARN] Could not build run chart: {exc}")
 
     print_console_report(res, args.equipment, args.operator)
+
+    # Print CI summary
+    print(f"  95% CI on GR&R: [{res.grr_ci95[0]:.5f}, {res.grr_ci95[1]:.5f}]")
+    if res.ndc_tol is not None:
+        print(f"  ndc (tolerance-based): {res.ndc_tol:.1f}")
 
     if pdf_path:
         build_pdf_report(res, pdf_path, args.equipment, args.operator, args.title)

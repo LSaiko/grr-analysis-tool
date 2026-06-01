@@ -1,5 +1,7 @@
-# Python >= 3.7 required (dataclasses). Tested on 3.9+.
-pandas>=1.5.0
-numpy>=1.23.0
-matplotlib>=3.6.0
-reportlab>=3.6.0
+# Python >= 3.9 required. Tested on 3.9, 3.11, 3.12.
+# reportlab 4.x dropped Python 3.7/3.8 support (requires >=3.9).
+pandas>=2.2.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+reportlab>=4.0.0
+scipy>=1.11.0        # optional: p-value lookups; graceful fallback if absent
