@@ -5,3 +5,4 @@ numpy>=1.26.0
 matplotlib>=3.8.0
 reportlab>=4.0.0
 scipy>=1.11.0        # optional: p-value lookups; graceful fallback if absent
+anthropic>=0.40.0    # optional: --explain narrative reports; skipped gracefully if absent

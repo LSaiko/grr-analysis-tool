@@ -2387,6 +2387,8 @@ def parse_args() -> argparse.Namespace:
                    help="Output interactive HTML dashboard (e.g. grr_dashboard.html)")
     p.add_argument("--json", type=Path, default=None, metavar="JSON_FILE",
                    help="Write machine-readable GR&R summary as JSON (for external tool integration)")
+    p.add_argument("--explain", type=Path, default=None, metavar="MD_FILE",
+                   help="Write a Claude-authored plain-English narrative report (requires ANTHROPIC_API_KEY)")
     p.add_argument("--tolerance", "-t", type=float, default=None, metavar="TOLERANCE",
                    help="Full engineering tolerance range (e.g. 0.050 for +/-0.025 spec)")
     p.add_argument("--usl", type=float, default=None, metavar="USL",
@@ -2458,6 +2460,20 @@ def main() -> None:
             write_json_export_attribute(attr, args, args.json)
         if args.dashboard:
             build_attribute_dashboard(attr, args.dashboard, args.equipment, args.operator, args.title)
+        if args.explain:
+            from msa_toolkit.explainer import generate_narrative
+            payload = {
+                "schema_version": 1,
+                "equipment":      args.equipment,
+                "operator":       args.operator,
+                "characteristic": args.title,
+                "study_type":     "attribute",
+                "metrics":        asdict(attr),
+            }
+            narrative = generate_narrative(payload)
+            if narrative:
+                args.explain.write_text(narrative, encoding="utf-8")
+                print(f"[+] Narrative report written to: {args.explain}")
         return
 
     # ── Linearity / Bias modes ──────────────────────────────────────────────
@@ -2563,6 +2579,24 @@ def main() -> None:
 
     if args.json:
         write_json_export(res, args, args.json)
+
+    if args.explain:
+        from msa_toolkit.explainer import generate_narrative
+        payload = {
+            "schema_version": 1,
+            "equipment":      args.equipment,
+            "operator":       args.operator,
+            "characteristic": args.title,
+            "study_type":     args.study_type,
+            "tolerance":      args.tolerance,
+            "usl":            args.usl,
+            "lsl":            args.lsl,
+            "metrics":        asdict(res),
+        }
+        narrative = generate_narrative(payload)
+        if narrative:
+            args.explain.write_text(narrative, encoding="utf-8")
+            print(f"[+] Narrative report written to: {args.explain}")
 
 
 if __name__ == "__main__":
