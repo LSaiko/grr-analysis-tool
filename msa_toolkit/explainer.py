@@ -51,7 +51,7 @@ def generate_narrative(payload: dict, model: str = "claude-sonnet-5") -> Optiona
     prompt = PROMPT_TEMPLATE.format(payload=json.dumps(payload, indent=2, default=str))
     message = client.messages.create(
         model=model,
-        max_tokens=600,
+        max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text
