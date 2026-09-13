@@ -45,8 +45,8 @@ import json
 import math
 import random
 import sys
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -2131,6 +2131,58 @@ def build_comparison_report(
 
 
 # ---------------------------------------------------------------------------
+# JSON Export  (for downstream tool integration, e.g. pFMEA generators)
+# ---------------------------------------------------------------------------
+
+def write_json_export(res: GRRResults, args: argparse.Namespace, path: Path) -> None:
+    """
+    Write a machine-readable summary of a crossed/nested-variables GR&R study
+    (a GRRResults instance) to `path` as JSON, for consumption by downstream
+    tools (e.g. a pFMEA generator) that need EV/AV/GRR/ndc/status without
+    parsing PDF or HTML output.
+    """
+    payload = {
+        "schema_version": 1,
+        "generated":      datetime.now(timezone.utc).isoformat(),
+        "input_csv":      str(args.input),
+        "equipment":      args.equipment,
+        "operator":       args.operator,
+        "characteristic": args.title,
+        "study_type":     args.study_type,
+        "tolerance":      args.tolerance,
+        "usl":            args.usl,
+        "lsl":            args.lsl,
+        "metrics":        asdict(res),
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"[+] JSON summary written to: {path}")
+
+
+def write_json_export_attribute(attr: AttributeGRRResults, args: argparse.Namespace, path: Path) -> None:
+    """
+    Write a machine-readable summary of an attribute agreement study
+    (an AttributeGRRResults instance) to `path` as JSON. Kept as a separate,
+    smaller function rather than unifying with write_json_export() because
+    attribute studies have a meaningfully different result shape (kappa /
+    agreement percentages instead of EV/AV/GRR variance components).
+    """
+    payload = {
+        "schema_version": 1,
+        "generated":      datetime.now(timezone.utc).isoformat(),
+        "input_csv":      str(args.input),
+        "equipment":      args.equipment,
+        "operator":       args.operator,
+        "characteristic": args.title,
+        "study_type":     "attribute",
+        "metrics":        asdict(attr),
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"[+] JSON summary written to: {path}")
+
+
+# ---------------------------------------------------------------------------
 # CLI Entry Point
 # ---------------------------------------------------------------------------
 
@@ -2162,6 +2214,8 @@ def parse_args() -> argparse.Namespace:
                    help="Output PDF path (default: <input_stem>_grr_report.pdf when no --dashboard)")
     p.add_argument("--dashboard", "-d", type=Path, default=None, metavar="HTML_FILE",
                    help="Output interactive HTML dashboard (e.g. grr_dashboard.html)")
+    p.add_argument("--json", type=Path, default=None, metavar="JSON_FILE",
+                   help="Write machine-readable GR&R summary as JSON (for external tool integration)")
     p.add_argument("--tolerance", "-t", type=float, default=None, metavar="TOLERANCE",
                    help="Full engineering tolerance range (e.g. 0.050 for +/-0.025 spec)")
     p.add_argument("--usl", type=float, default=None, metavar="USL",
@@ -2229,6 +2283,8 @@ def main() -> None:
                 sys.exit(f"[ERROR] Failed to read reference CSV: {exc}")
         attr = compute_attribute_grr(records, refs)
         print_attribute_report(attr)
+        if args.json:
+            write_json_export_attribute(attr, args, args.json)
         return
 
     # ── Linearity / Bias modes ──────────────────────────────────────────────
@@ -2331,6 +2387,9 @@ def main() -> None:
 
     if args.dashboard:
         build_dashboard(res, args.dashboard, args.equipment, args.operator, args.title)
+
+    if args.json:
+        write_json_export(res, args, args.json)
 
 
 if __name__ == "__main__":
