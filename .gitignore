@@ -28,6 +28,11 @@ ENV/
 *.html
 !grr_dashboard.html
 
+# Secrets
+.env
+.env.py
+.env.*
+
 # IDE / OS
 .vscode/
 .idea/
