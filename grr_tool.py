@@ -1919,6 +1919,177 @@ def print_attribute_report(attr: AttributeGRRResults) -> None:
     print("=" * w)
 
 
+def build_attribute_dashboard(
+    attr:           AttributeGRRResults,
+    output_path:    Path,
+    equipment:      str,
+    study_operator: str,
+    title:          str = "Attribute Agreement Analysis Dashboard",
+) -> None:
+    """
+    Generate a self-contained interactive HTML dashboard for an attribute
+    (go/no-go) GR&R study, mirroring the variable-data dashboard's look.
+
+    Includes a per-operator Kappa bar chart with the standard Landis &
+    Koch / AIAG reference lines (0.75 acceptable, 0.40 unacceptable) plus
+    a summary KPI row and per-operator table.
+    """
+    sc_map = {
+        "ACCEPTABLE":   {"bg": "#1a5c2e", "badge": "#27AE60", "text": "#d4f1e0"},
+        "MARGINAL":     {"bg": "#7a3a00", "badge": "#E67E22", "text": "#fde9d0"},
+        "UNACCEPTABLE": {"bg": "#5c1a1a", "badge": "#C0392B", "text": "#f9d6d6"},
+    }
+    sc = sc_map.get(attr.status, sc_map["UNACCEPTABLE"])
+
+    def kappa_color(k: float) -> str:
+        return "#27AE60" if k >= 0.75 else "#E67E22" if k >= 0.40 else "#C0392B"
+
+    kappa_vals   = [attr.kappa.get(op, 0.0) for op in attr.operators]
+    kappa_colors = [kappa_color(k) for k in kappa_vals]
+
+    eff_row = ""
+    if attr.overall_effectiveness is not None:
+        eff_row = f"""
+      <div class="kpi">
+        <div class="kpi-label">Overall Effectiveness</div>
+        <div class="kpi-value">{attr.overall_effectiveness:.1f}%</div>
+      </div>"""
+
+    rows_html = "".join(
+        f"<tr><td>{op}</td><td>{attr.within_op_agreement[op]:.1f}%</td>"
+        f"<td style=\"color:{kappa_color(attr.kappa.get(op, 0.0))};font-weight:700\">"
+        f"{attr.kappa.get(op, 0.0):.3f}</td></tr>"
+        for op in attr.operators
+    )
+
+    js_data = {
+        "operators": attr.operators,
+        "kappa":     kappa_vals,
+        "colors":    kappa_colors,
+    }
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {{
+    --navy: #1A3A5C; --bg: #f0f3f7; --card: #ffffff;
+    --border: #d0d7e2; --text: #1a2332; --muted: #667388;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: var(--bg); color: var(--text); font-size: 14px; }}
+  header {{ background: var(--navy); color: #fff; padding: 18px 32px 14px;
+             display: flex; justify-content: space-between; align-items: center;
+             flex-wrap: wrap; gap: 8px; }}
+  header h1 {{ font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; }}
+  header .meta {{ font-size: 0.78rem; opacity: .75; text-align: right; line-height: 1.6; }}
+  .verdict-bar {{ background: {sc['bg']}; color: {sc['text']};
+                   padding: 12px 32px; display: flex; align-items: center;
+                   gap: 16px; flex-wrap: wrap; }}
+  .verdict-badge {{ background: {sc['badge']}; color: #fff; font-size: 0.85rem;
+                     font-weight: 700; padding: 4px 14px; border-radius: 4px;
+                     letter-spacing: .05em; }}
+  main {{ max-width: 1100px; margin: 24px auto; padding: 0 20px; }}
+  .grid {{ display: grid; gap: 20px; }}
+  .grid-3 {{ grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }}
+  .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+            padding: 20px 22px; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 20px; }}
+  .card h2 {{ font-size: 0.9rem; font-weight: 700; color: var(--navy);
+               text-transform: uppercase; letter-spacing: .06em; margin-bottom: 14px; }}
+  .chart-wrap {{ position: relative; height: 300px; }}
+  .kpi {{ background: #f7f9fc; border: 1px solid var(--border); border-radius: 6px;
+           padding: 10px 14px; }}
+  .kpi-label {{ font-size: 0.72rem; color: var(--muted); text-transform: uppercase; }}
+  .kpi-value {{ font-size: 1.4rem; font-weight: 700; color: var(--navy); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
+  th, td {{ padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }}
+  th {{ color: var(--muted); text-transform: uppercase; font-size: 0.72rem; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>{title}</h1>
+  <div class="meta">Equipment: {equipment}<br>Study Operator: {study_operator}<br>Date: {date.today()}</div>
+</header>
+<div class="verdict-bar">
+  <span class="verdict-badge">{attr.status}</span>
+  <span>Between-operator agreement: {attr.between_op_agreement:.1f}%</span>
+</div>
+<main>
+  <div class="grid grid-3">
+    <div class="kpi">
+      <div class="kpi-label">Between-Operator Agreement</div>
+      <div class="kpi-value">{attr.between_op_agreement:.1f}%</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Operators</div>
+      <div class="kpi-value">{len(attr.operators)}</div>
+    </div>{eff_row}
+  </div>
+
+  <div class="card">
+    <h2>Attribute Agreement &mdash; Kappa by Operator</h2>
+    <div class="chart-wrap"><canvas id="kappa-chart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>Operator Summary</h2>
+    <table>
+      <thead><tr><th>Operator</th><th>Within-Op Agreement</th><th>Kappa</th></tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+  </div>
+</main>
+<script>
+const D = {json.dumps(js_data)};
+
+// Landis & Koch / AIAG kappa reference-line plugin
+const kappaThresholds = {{
+  id: 'kappaThresholds',
+  afterDraw(chart) {{
+    const {{ctx, chartArea: {{left, right}}, scales: {{y}}}} = chart;
+    [[0.75,'#27AE60','0.75 (Acceptable)'], [0.40,'#C0392B','0.40 (Unacceptable)']].forEach(([v,c,lbl]) => {{
+      const yp = y.getPixelForValue(v);
+      ctx.save();
+      ctx.setLineDash([5,4]); ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(left,yp); ctx.lineTo(right,yp); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = c; ctx.font = '600 10px sans-serif';
+      ctx.textAlign = 'right'; ctx.fillText(lbl, right-4, yp-4);
+      ctx.restore();
+    }});
+  }}
+}};
+Chart.register(kappaThresholds);
+
+new Chart(document.getElementById('kappa-chart'), {{
+  type: 'bar',
+  data: {{
+    labels: D.operators,
+    datasets: [{{ label: 'Kappa', data: D.kappa, backgroundColor: D.colors, borderRadius: 4 }}]
+  }},
+  options: {{
+    responsive: true, maintainAspectRatio: false,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: c => ' ' + c.parsed.y.toFixed(3) }} }} }},
+    scales: {{
+      y: {{ min: 0, max: 1, grid: {{ color: '#e8ecf0' }} }},
+      x: {{ grid: {{ display: false }} }}
+    }}
+  }}
+}});
+</script>
+</body>
+</html>
+"""
+    output_path.write_text(html, encoding="utf-8")
+    print(f"[+] Attribute dashboard written to: {output_path}")
+
+
 # ---------------------------------------------------------------------------
 # Run Chart + Nelson Rules  (Task 4F)
 # ---------------------------------------------------------------------------
@@ -2285,6 +2456,8 @@ def main() -> None:
         print_attribute_report(attr)
         if args.json:
             write_json_export_attribute(attr, args, args.json)
+        if args.dashboard:
+            build_attribute_dashboard(attr, args.dashboard, args.equipment, args.operator, args.title)
         return
 
     # ── Linearity / Bias modes ──────────────────────────────────────────────
