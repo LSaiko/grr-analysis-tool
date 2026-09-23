@@ -41,6 +41,7 @@ __version__ = "2.0.0"
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import random
@@ -2330,6 +2331,46 @@ def write_json_export(res: GRRResults, args: argparse.Namespace, path: Path) -> 
     print(f"[+] JSON summary written to: {path}")
 
 
+def build_test_evidence(
+    res: GRRResults, input_csv: Path, pdf_path: Path, requirement_ids: List[str],
+) -> dict:
+    """
+    Map a crossed GR&R result to a traceability-matrix-dhf TestEvidence record
+    (schemas/test-evidence.schema.json). evidence_uri points at the PDF report.
+
+    result: "pass" needs ACCEPTABLE *and* ndc >= NDC_MINIMUM; UNACCEPTABLE is
+    "fail"; anything else (MARGINAL, or ACCEPTABLE with poor discrimination)
+    is "conditional" -- AIAG leaves it to documented engineering judgement.
+    The id is derived from the input CSV bytes, so re-running the same study
+    yields the same id (idempotent ingestion).
+    """
+    if res.status == "ACCEPTABLE" and res.ndc >= NDC_MINIMUM:
+        result = "pass"
+    elif res.status == "UNACCEPTABLE":
+        result = "fail"
+    else:
+        result = "conditional"
+    return {
+        "id":                     "GRR-" + hashlib.sha256(input_csv.read_bytes()).hexdigest()[:12],
+        "type":                   "GRR",
+        "result":                 result,
+        "source_repo":            "grr-analysis-tool",
+        "linked_requirement_ids": requirement_ids,
+        "evidence_uri":           pdf_path.resolve().as_uri(),
+        "generated_at":           datetime.now(timezone.utc).isoformat(),
+        "summary":                f"%GR&R {res.pct_grr:.1f}% ({res.status}), ndc {res.ndc}",
+        "metrics": {
+            "status":      res.status,
+            "pct_grr":     res.pct_grr,
+            "pct_ev":      res.pct_ev,
+            "pct_av":      res.pct_av,
+            "pct_pv":      res.pct_pv,
+            "ndc":         res.ndc,
+            "pct_tol_grr": res.pct_tol_grr,
+        },
+    }
+
+
 def write_json_export_attribute(attr: AttributeGRRResults, args: argparse.Namespace, path: Path) -> None:
     """
     Write a machine-readable summary of an attribute agreement study
@@ -2387,6 +2428,12 @@ def parse_args() -> argparse.Namespace:
                    help="Output interactive HTML dashboard (e.g. grr_dashboard.html)")
     p.add_argument("--json", type=Path, default=None, metavar="JSON_FILE",
                    help="Write machine-readable GR&R summary as JSON (for external tool integration)")
+    p.add_argument("--test-evidence", type=Path, default=None, metavar="JSON_FILE",
+                   help="Write a traceability-matrix-dhf TestEvidence record (type=GRR) "
+                        "pointing at the PDF report (crossed studies only)")
+    p.add_argument("--requirement-ids", type=str, default="", metavar="CSV_LIST",
+                   help="Requirement IDs this study verifies, e.g. REQ-12,REQ-14 "
+                        "(recorded in --test-evidence)")
     p.add_argument("--explain", type=Path, default=None, metavar="MD_FILE",
                    help="Write a Claude-authored plain-English narrative report (requires ANTHROPIC_API_KEY)")
     p.add_argument("--tolerance", "-t", type=float, default=None, metavar="TOLERANCE",
@@ -2579,6 +2626,15 @@ def main() -> None:
 
     if args.json:
         write_json_export(res, args, args.json)
+
+    if args.test_evidence:
+        if not pdf_path:
+            sys.exit("[ERROR] --test-evidence needs a PDF report to point at; "
+                     "pass --output (or drop --dashboard).")
+        req_ids = [r.strip() for r in args.requirement_ids.split(",") if r.strip()]
+        evidence = build_test_evidence(res, args.input, pdf_path, req_ids)
+        args.test_evidence.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        print(f"[+] TestEvidence written to: {args.test_evidence} (result={evidence['result']})")
 
     if args.explain:
         from msa_toolkit.explainer import generate_narrative

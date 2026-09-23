@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TestEvidence",
+  "description": "traceability-matrix-dhf TestEvidence record (fields per its design spec: id, type, result, source_repo, linked_requirement_ids, evidence_uri). grr-analysis-tool emits type=GRR.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "result", "source_repo", "linked_requirement_ids", "evidence_uri"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^GRR-[0-9a-f]{12}$"},
+    "type": {"enum": ["IQ", "OQ", "PQ", "GRR", "model_validation"]},
+    "result": {"enum": ["pass", "conditional", "fail"]},
+    "source_repo": {"type": "string", "minLength": 1},
+    "linked_requirement_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "evidence_uri": {"type": "string", "pattern": "^file://.+\\.pdf$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "summary": {"type": "string"},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "pct_grr", "pct_ev", "pct_av", "pct_pv", "ndc"],
+      "properties": {
+        "status": {"enum": ["ACCEPTABLE", "MARGINAL", "UNACCEPTABLE"]},
+        "pct_grr": {"type": "number"},
+        "pct_ev": {"type": "number"},
+        "pct_av": {"type": "number"},
+        "pct_pv": {"type": "number"},
+        "ndc": {"type": "integer"},
+        "pct_tol_grr": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

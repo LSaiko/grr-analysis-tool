@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `--test-evidence` / `--requirement-ids`: traceability-matrix-dhf `TestEvidence` export (type=GRR),
+  additive; PDF output byte-identical. Contract in `schemas/test-evidence.schema.json`
+- `tests/test_grr_calc.py`: GR&R calculation checked against the AIAG MSA 4th Ed. reference study
+  and a hand-calculated example; GitHub Actions CI (Python 3.9 / 3.11 / 3.12)
+
+---
+
 ## [2.0.0] — 2026-06
 
 ### Fixed
