@@ -1,5 +1,7 @@
 # GR&R Analysis Tool
 
+[![CI](https://github.com/LSaiko/grr-analysis-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/LSaiko/grr-analysis-tool/actions/workflows/ci.yml)
+![tested against](https://img.shields.io/badge/tested%20against-AIAG%20MSA%20reference%20study-brightgreen)
 ![version](https://img.shields.io/badge/version-2.0.0-blue)
 ![python](https://img.shields.io/badge/python-%3E%3D3.9-blue)
 ![standard](https://img.shields.io/badge/standard-AIAG%20MSA%204th%20Ed-orange)
@@ -328,6 +330,8 @@ Imprecision alone is borderline marginal, but the +9.1% positive bias consumes m
 | File | Description |
 |------|-------------|
 | `grr_tool.py` | Main analysis script (CLI) — v2.0.0 |
+| `schemas/test-evidence.schema.json` | TestEvidence contract for `--test-evidence` |
+| `tests/` | pytest suite (GR&R reference checks, evidence export, toolkit modules) |
 | `requirements.txt` | Python dependencies (Python ≥ 3.9) |
 | `sample_grr.csv` | Example A dataset — Mitutoyo micrometer |
 | `grr_report.pdf` | Example A PDF report — ⚠️ MARGINAL (17.0% GR&R, ndc 8) |
@@ -439,6 +443,8 @@ python grr_tool.py --input data.csv --dashboard results.html
 --equipment,  -e  Gage / equipment identifier string
 --operator        Name of QE or team who performed the study
 --generate-sample Generate a synthetic 10x3x3 CSV before analysis
+--test-evidence   Write a traceability-matrix-dhf TestEvidence JSON (type=GRR) for the PDF
+--requirement-ids Comma-separated requirement IDs the study verifies (goes into --test-evidence)
 --version,    -v  Show tool version and exit
 ```
 
@@ -497,6 +503,37 @@ Self-contained single-file dashboard (Chart.js, no server needed):
 - Full metrics table and per-operator breakdown
 - %Tolerance section (when `--tolerance` is provided)
 
+### TestEvidence export (`--test-evidence`)
+
+Additive: emits a [traceability-matrix-dhf](https://github.com/LSaiko/traceability-matrix-dhf) `TestEvidence` record alongside the PDF, which is byte-identical with or without the flag. Crossed studies only; a PDF is required because `evidence_uri` points at it.
+
+```bash
+python grr_tool.py -i sample_grr.csv -o grr_report.pdf --test-evidence grr_evidence.json --requirement-ids REQ-12,REQ-14
+```
+
+```json
+{
+  "id": "GRR-25de37bddc5c",
+  "type": "GRR",
+  "result": "conditional",
+  "source_repo": "grr-analysis-tool",
+  "linked_requirement_ids": ["REQ-12", "REQ-14"],
+  "evidence_uri": "file:///.../grr_report.pdf",
+  "generated_at": "2026-09-23T04:08:46+00:00",
+  "summary": "%GR&R 17.0% (MARGINAL), ndc 8",
+  "metrics": {"status": "MARGINAL", "pct_grr": 17.02, "pct_ev": 10.06, "pct_av": 13.73, "pct_pv": 98.54, "ndc": 8, "pct_tol_grr": null}
+}
+```
+
+| GR&R outcome | `result` |
+|---|---|
+| ACCEPTABLE (≤ 10%) **and** ndc ≥ 5 | `pass` |
+| MARGINAL, or ACCEPTABLE with ndc < 5 | `conditional` — needs documented engineering justification (AIAG) |
+| UNACCEPTABLE (> 30%) | `fail` |
+
+- `id` is a hash of the input CSV, so re-running the same study gives the same id.
+- Contract: [`schemas/test-evidence.schema.json`](schemas/test-evidence.schema.json). traceability-matrix-dhf's design spec defines `TestEvidence` (id, type, result, source_repo, linked_requirement_ids, evidence_uri), but that repo doesn't ship the model or a GRR ingestion adapter yet. This schema is the contract until it does.
+
 ---
 
 ## Methodology
@@ -512,6 +549,19 @@ Implements the **AIAG crossed GR&R** method:
 7. ndc = 1.41 × (PV / GR&R)
 
 Study variation is expressed as **5.15σ** (99% of the normal distribution), per AIAG convention.
+
+### Verification
+
+[`tests/test_grr_calc.py`](tests/test_grr_calc.py) checks `compute_grr` against numbers that come from outside the tool:
+
+- **AIAG MSA 4th Ed. reference study** (10 parts × 3 appraisers × 3 trials). R̄ per appraiser, R̄̄, X-diff, Rp, UCL_R, and the out-of-control range (appraiser B, part 4) match the published data sheet. %EV / %AV / %GRR / %PV match within 0.1 pp: the tool gives 26.74% GR&R and the manual gives 26.68%. The small gap comes from the rounded K constants (K1 = 3.05 vs 5.15/1.693 = 3.042), and it can't change the verdict or ndc.
+- **Hand-calculated 2×2×2 study**, with the arithmetic written out in the test.
+- **K1/K2/K3 tables** recomputed as 5.15/d2* from AIAG Appendix C.
+- **Known issue**, pinned as a strict `xfail`: the out-of-control *part labels* assume the CSV is sorted by part within each operator. All bundled samples are sorted. The metrics don't depend on row order, and a test checks that.
+
+```bash
+pip install -r requirements.txt pytest jsonschema && pytest
+```
 
 ---
 
